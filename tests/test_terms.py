@@ -68,7 +68,8 @@ class FrequentTermsTests(unittest.TestCase):
             self.assertEqual(client.get('/terms', follow_redirects=False).status_code, 303)
             page = client.get('/terms', cookies=cookies)
             self.assertIn('promoção', page.text)
-            self.assertIn('2 ofertas/álbuns', page.text)
+            self.assertIn('2 ofertas', page.text)
+            self.assertNotIn('álbum', page.text.lower())
             self.assertEqual(client.post('/terms/hide', cookies=cookies, data={'word': 'promoção'}).status_code, 403)
             headers = {'Accept': 'application/json'}
             data = {'csrf': main.csrf_token, 'word': 'promoção'}
@@ -83,6 +84,44 @@ class FrequentTermsTests(unittest.TestCase):
             self.assertTrue(result.headers['location'].startswith('/terms?'))
             self.assertEqual(self.store.feed(), [])
             self.assertEqual(self.store.unread(), 2)
+
+    def test_frequencies_exclude_ignored_offers_and_whole_albums(self):
+        self.add(1, 'Cafeteira PS5!')
+        self.add(2, 'Cafeteira (ps5)')
+        self.add(3, 'Cafeteira de viagem', 42)
+        self.add(4, 'Oferta PS5', 42)
+        self.add(5, 'Cafeteira doméstica')
+        self.add(6, 'Cafeteira doméstica')
+        self.add(7, 'Cafeteira PS5pro')
+        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 6)
+        self.store.add_ignored('PS5')
+        terms = {normalize(t['word']): t['count'] for t in self.store.frequent_terms()}
+        self.assertEqual(terms['cafeteira'], 3)
+        self.assertEqual(len(self.store.feed()), 3)
+        self.assertEqual(len(self.store.feed(alerts=True)), 3)
+        self.assertEqual(self.store.unread(), 3)
+        self.store.execute('DELETE FROM ignored_keywords')
+        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 6)
+
+    def test_hidden_phrases_hide_contained_whole_terms_and_restore(self):
+        self.add(1, 'Preço baixo PS5pro preço baixote')
+        self.add(2, 'preco baixo PS5pro preco baixote')
+        self.store.hide_suggestion('PREÇO BAIXO')
+        terms = {normalize(t['word']) for t in self.store.frequent_terms()}
+        self.assertNotIn('preco', terms)
+        self.assertNotIn('baixo', terms)
+        self.assertNotIn('preco baixo', terms)
+        self.assertIn('baixote', terms)
+        self.assertIn('ps5pro', terms)
+        self.assertIn('preco baixo ps5pro', terms)
+        self.store.hide_suggestion('preço excelente')
+        self.store.execute('DELETE FROM hidden_suggestions WHERE normalized=?', ('preco baixo',))
+        terms = {normalize(t['word']) for t in self.store.frequent_terms()}
+        self.assertNotIn('preco', terms)
+        self.assertIn('baixo', terms)
+        self.assertIn('preco baixo', terms)
+        self.store.execute('DELETE FROM hidden_suggestions')
+        self.assertIn('preco', {normalize(t['word']) for t in self.store.frequent_terms()})
 
     def test_batch_actions_are_atomic_and_preserve_alerts(self):
         self.add(1, 'PS5 promoção preço baixo')

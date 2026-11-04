@@ -51,3 +51,7 @@ Testes com SQLite temporário verificam contagem por oferta e álbum, acentos, e
 ## Ações em lote nos termos
 
 Testes com dados temporários verificam operações atômicas, validação, limite, CSRF, duplicatas, preservação de alertas e fallback sem JavaScript. Chromium em largura de 390 px verificou seleção, selecionar todos, ambas as ações e fallback sem JavaScript. Sem Telegram real ou Docker local.
+
+## Frequência e filtros
+
+Testes com dados temporários verificam que ofertas ignoradas e álbuns com partes ignoradas não entram nas frequências; palavras e expressões inteiras contidas em sugestões ocultas deixam de aparecer, com restauração e alertas preservados.

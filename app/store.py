@@ -24,6 +24,16 @@ def ignored_matches(text, word):
     return bool(word and re.search(r'(?<![^\W_])' + re.escape(normalize(word)) + r'(?![^\W_])', normalize(text or '')))
 
 
+def term_phrases(text):
+    tokens = list(re.finditer(r'[^\W_]+', text))
+    for i, first in enumerate(tokens):
+        for size in (1, 2, 3):
+            chunk = tokens[i:i + size]
+            if len(chunk) != size or any(text[a.end():b.start()] != ' ' for a, b in zip(chunk, chunk[1:])):
+                break
+            yield text[first.start():chunk[-1].end()].casefold(), first.group(), chunk[-1].group()
+
+
 class Store:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -106,27 +116,26 @@ class Store:
         counts, examples = Counter(), {}
         with self.connect() as db:
             db.execute('BEGIN')
-            hidden = {row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions UNION SELECT normalized FROM ignored_keywords')}
+            ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
+            hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
             rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY chat_id,grouped_id,id').fetchall()
+        ignored_pattern = (re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, ignored)) + r')(?![^\W_])')
+                           if ignored else None)
+        hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
         key = lambda row: (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else (row['chat_id'], 'message', row['id'])
         for _, parts in groupby(rows, key):
+            parts = list(parts)
+            if ignored_pattern and any(ignored_pattern.search(normalize(part['body'])) for part in parts):
+                continue
             terms = {}
             for part in parts:
                 body = unicodedata.normalize('NFC', re.sub(r'https?://\S+|www\.\S+', ' ', part['body'], flags=re.IGNORECASE))
-                tokens = list(re.finditer(r'[^\W_]+', body))
-                for i, first in enumerate(tokens):
-                    for size in (1, 2, 3):
-                        chunk = tokens[i:i + size]
-                        if len(chunk) != size:
-                            break
-                        if any(body[a.end():b.start()] != ' ' for a, b in zip(chunk, chunk[1:])):
-                            break
-                        word = body[first.start():chunk[-1].end()].casefold()
-                        normalized = normalize(word)
-                        if (len(word) <= 100 and len(normalized) > 1 and
-                            normalize(first.group()) not in stopwords and
-                            normalize(chunk[-1].group()) not in stopwords and normalized not in hidden):
-                            terms.setdefault(normalized, word)
+                for word, first, last in term_phrases(body):
+                    normalized = normalize(word)
+                    if (len(word) <= 100 and len(normalized) > 1 and
+                        normalize(first) not in stopwords and normalize(last) not in stopwords and
+                        normalized not in hidden_terms):
+                        terms.setdefault(normalized, word)
             counts.update(terms.keys())
             for term, word in terms.items():
                 examples.setdefault(term, word)

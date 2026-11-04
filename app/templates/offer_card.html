@@ -11,7 +11,7 @@
 <div class="meta"><strong>{{ offer.chat_title }}</strong><time datetime="{{ offer.date }}">{{ offer.date[:16]|replace('T', ' ') }} UTC</time></div>
 {% if offer.rules %}<span class="match">{{ 'Lido' if offer.seen else 'Novo alerta' }} · {{ offer.rules }}</span>{% endif %}
 <div class="offer-preview">{% for line in offer.preview_lines %}<span>{{ line }}</span>{% else %}<span class="muted">Oferta sem texto</span>{% endfor %}</div>
-{% if offer.parts|length > 1 %}<span class="album-label">Álbum · {{ offer.parts|length }} mensagens</span>{% endif %}
+{% if offer.parts|length > 1 %}<span class="album-label">{{ offer.parts|length }} mensagens</span>{% endif %}
 <span class="offer-toggle"><span class="when-closed">Ver oferta completa ↗</span><span class="when-open">Recolher oferta ↑</span></span>
 </div>
 </summary>
