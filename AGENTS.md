@@ -17,7 +17,8 @@ App pessoal para acompanhar ofertas em grupos e canais Telegram usando a conta d
 
 - `app/main.py`: FastAPI, autenticação HTTP Basic, CSRF, rotas e respostas HTML/JSON. Senha própria com mínimo de 12 caracteres. `/health` mede o processo web, não o Telegram.
 - `app/telegram.py`: cliente Telethon, login telefone → código → senha opcional, conexão e eventos. Login em andamento pertence à memória de uma única instância; a sessão concluída pertence ao diretório de dados.
-- `app/store.py`: SQLite, normalização, correspondências e transações. Só armazene mensagens de grupos selecionados. Identidade de oferta: `(chat_id, message_id)`; edições atualizam a mesma oferta e recalculam correspondências atomicamente.
+- `app/store.py`: SQLite, normalização, correspondências, backup antes da migração e transações. Só armazene mensagens de grupos selecionados. Identidade de oferta: `(chat_id, message_id)`; edições atualizam a mesma oferta e recalculam correspondências atomicamente.
+- `app/messages.py`: metadados originais e renderização segura das entidades UTF-16; valide URLs e escape texto antes de marcar HTML como seguro. Mídias privadas usam rota autenticada e cache no volume.
 - `app/templates/` e `app/static/`: interface em português, HTML escapado, JavaScript progressivo e CSS local. Erros de login mantêm os campos no DOM; não grave segredos em armazenamento do navegador nem os reflita em respostas.
 - `tests/`: testes `unittest`, dados temporários e Telegram simulado. Não use a sessão ou o banco pessoal em verificações automatizadas.
 

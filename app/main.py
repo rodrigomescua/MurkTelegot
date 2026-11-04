@@ -6,12 +6,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
+from app.messages import media_info, present, source_data
 from app.store import Store
 from app.telegram import Telegram
 
@@ -60,6 +61,7 @@ async def headers(request, call_next):
     response = await call_next(request)
     response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -72,16 +74,9 @@ async def health():
 
 @app.get('/', dependencies=[Depends(authenticate)])
 async def dashboard(request: Request, alerts: bool = False, q: str = '', notice: str = ''):
-    clauses, args = [], []
-    if alerts:
-        clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
-    if q:
-        clauses.append("body LIKE ? ESCAPE '\\'")
-        args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
-    where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
-    offers = store.rows(f'''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
-        JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules
-        FROM offers o {where} ORDER BY date DESC, id DESC LIMIT 100''', args)
+    offers = store.feed(q, alerts)
+    for offer in offers:
+        offer['parts'] = [present(part) for part in offer['parts']]
     return templates.TemplateResponse(request, 'index.html', {
         'csrf': csrf_token, 'authorized': await telegram.authorized(),
         'configured': bool(telegram.client), 'connection_error': telegram.error,
@@ -89,7 +84,7 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         'needs_password': telegram.needs_password,
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
         'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'), 'offers': offers,
-        'unread': store.rows('SELECT count(*) AS n FROM offers WHERE seen=0 AND EXISTS(SELECT 1 FROM hits WHERE offer_id=offers.id)')[0]['n'],
+        'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
     })
 
@@ -194,5 +189,44 @@ async def delete_rule(rule_id: int):
 
 @app.post('/offers/{offer_id}/seen', dependencies=[Depends(authenticate), Depends(csrf)])
 async def seen(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
-    store.execute('UPDATE offers SET seen=1 WHERE id=?', (offer_id,))
+    store.mark_seen(offer_id)
     return redirect('Oferta marcada como lida.', q=q, alerts=alerts, anchor=f'#offer-{offer_id}')
+
+
+@app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])
+async def offer_media(offer_id: int, thumbnail: bool = False):
+    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    if not rows:
+        raise HTTPException(404, 'Oferta não encontrada.')
+    offer = rows[0]
+    info = media_info(source_data(offer))
+    if not info or info['kind'] == 'unsupported':
+        raise HTTPException(404, 'Mídia não disponível para visualização.')
+    try:
+        path = await telegram.download(offer, thumbnail)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    except (errors.RPCError, OSError, asyncio.TimeoutError):
+        raise HTTPException(503, 'Não foi possível carregar a mídia. Tente novamente ou abra no Telegram.')
+    inline = info['kind'] in ('photo', 'video', 'audio')
+    mime = 'image/jpeg' if thumbnail else (info['mime'] if inline else 'application/octet-stream')
+    return FileResponse(path, media_type=mime, filename='miniatura.jpg' if thumbnail else info['name'],
+                        content_disposition_type='inline' if inline or thumbnail else 'attachment')
+
+
+@app.post('/offers/{offer_id}/refresh', dependencies=[Depends(authenticate), Depends(csrf)])
+async def refresh_offer(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
+    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    if not rows:
+        raise HTTPException(404, 'Oferta não encontrada.')
+    try:
+        async with telegram.lock:
+            await telegram.refresh(rows[0])
+        message = 'Conteúdo original recuperado do Telegram.'
+    except ValueError as exc:
+        message = str(exc)
+    except errors.FloodWaitError as exc:
+        message = f'Telegram solicitou aguardar {exc.seconds} segundos antes de recuperar o original.'
+    except (errors.RPCError, OSError, asyncio.TimeoutError):
+        message = 'Não foi possível recuperar o original. Conteúdo anterior preservado; tente novamente.'
+    return redirect(message, q=q, alerts=alerts, anchor=f'#message-{offer_id}')

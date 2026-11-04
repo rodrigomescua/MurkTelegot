@@ -7,6 +7,7 @@ Organização adaptada do RazorMiniflux: contrato operacional na raiz, decisões
 | [README principal](../README.md) | Instalação, configuração e uso |
 | [AGENTS.md](../AGENTS.md) | Contratos atuais, comandos e rotina de manutenção |
 | [ADR-0001](architecture/ADR-0001-conta-telegram-sqlite-e-container.md) | Conta Telegram, persistência e distribuição |
+| [ADR-0002](architecture/ADR-0002-conteudo-mensagens-telegram.md) | Formatação, mídia e migração de mensagens |
 | [Primeira entrega](plans/primeira-entrega.md) | Escopo, critérios de aceite e estado da entrega |
 | [Operação](operacao.md) | Publicação, dados, atualização e recuperação |
 | [Verificação](verificacao.md) | Como repetir testes e limites das evidências |

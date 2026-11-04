@@ -23,7 +23,7 @@ Distribuir um container sem privilégios com Python 3.12 e volume `/data`. O Com
 
 Não é necessário instalar um bot nos grupos nem operar um banco separado. A sessão salva permite reconectar após reinício, mas dá acesso à conta e deve ser protegida como uma credencial. Uma única instância/worker evita dividir o estado do login e compartilhar a sessão entre processos.
 
-O painel mostra até 100 mensagens por consulta; a base não tem limpeza automática. Não há downloads de mídia, extração de preço, notificações externas nem sincronização de exclusões. Backup, monitoramento de disco e futuras migrações exigem cuidado operacional; veja [operação](../operacao.md).
+O painel mostra até 100 mensagens por consulta; a base não tem limpeza automática. A decisão de não baixar mídia foi substituída pela [ADR-0002](ADR-0002-conteudo-mensagens-telegram.md). Não há extração de preço, notificações externas nem sincronização de exclusões. Backup, monitoramento de disco e futuras migrações exigem cuidado operacional; veja [operação](../operacao.md).
 
 ## Revisão de 2026-11-04 — primeira release
 

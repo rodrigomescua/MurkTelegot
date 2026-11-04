@@ -1,0 +1,30 @@
+<div class="message-part" id="message-{{ part.id }}">
+  {% if part.forwarded %}<p class="forwarded">↗ {{ part.forwarded }}</p>{% endif %}
+  {% if part.reply %}<div class="message-reply">{% if part.reply_url %}<a href="{{ part.reply_url }}" target="_blank" rel="noopener noreferrer">Resposta à mensagem #{{ part.reply }}</a>{% else %}Resposta à mensagem #{{ part.reply }}{% endif %}{% if part.quote %}<blockquote>{{ part.quote }}</blockquote>{% endif %}</div>{% endif %}
+  {% if part.media %}
+    {% if part.media.spoiler %}<details class="media-spoiler"><summary>Mostrar mídia com spoiler</summary>{% endif %}
+    {% if part.media.kind == 'photo' %}
+      <a class="message-photo" href="/offers/{{ part.id }}/media" target="_blank" rel="noopener"><img src="/offers/{{ part.id }}/media" alt="Imagem da oferta — abrir em tamanho original" loading="lazy" data-message-media></a>
+    {% elif part.media.kind == 'video' %}
+      <video class="message-video" controls playsinline preload="none" {% if part.media.thumbnail %}poster="/offers/{{ part.id }}/media?thumbnail=true"{% endif %}><source src="/offers/{{ part.id }}/media" type="{{ part.media.mime }}">Seu navegador não reproduz este vídeo.</video>
+    {% elif part.media.kind == 'audio' %}
+      <audio class="message-audio" controls preload="none" src="/offers/{{ part.id }}/media">Seu navegador não reproduz este áudio.</audio>
+    {% elif part.media.kind == 'file' %}
+      {% if part.media.thumbnail %}<img class="attachment-thumbnail" src="/offers/{{ part.id }}/media?thumbnail=true" alt="Miniatura do anexo" loading="lazy" data-message-media>{% endif %}
+      <a class="attachment" href="/offers/{{ part.id }}/media" download>↓ {{ part.media.name }}{% if part.media.size %} · {{ (part.media.size / 1024 / 1024)|round(1) }} MB{% endif %}</a>
+    {% else %}<p class="muted">{{ part.media.label }}</p>{% endif %}
+    {% if part.media.kind in ('photo', 'video', 'audio') %}<a class="media-download" href="/offers/{{ part.id }}/media" download>Baixar original</a>{% endif %}
+    <p class="field-help media-help" hidden>Não foi possível exibir a mídia. Tente abrir o original ou a mensagem no Telegram.</p>
+    {% if part.media.spoiler %}</details>{% endif %}
+  {% endif %}
+  {% if part.body %}<div class="body message-text">{{ part.html }}</div>{% endif %}
+  {% if part.preview %}<aside class="link-preview">{% if part.preview.url %}<a href="{{ part.preview.url }}" target="_blank" rel="noopener noreferrer">{{ part.preview.title or part.preview.url }}</a>{% elif part.preview.title %}<strong>{{ part.preview.title }}</strong>{% endif %}{% if part.preview.description %}<p>{{ part.preview.description }}</p>{% endif %}</aside>{% endif %}
+  {% if part.poll %}<section class="message-poll"><h3>{{ part.poll.question }}</h3>{% for answer in part.poll.answers %}<div class="poll-answer"><span>{{ answer.text }}</span><meter value="{{ answer.votes }}" max="{{ part.poll.total or 1 }}">{{ answer.votes }}</meter><small>{{ answer.votes }} votos</small></div>{% endfor %}<p class="field-help">{{ part.poll.total }} votos · {{ 'Encerrada' if part.poll.closed else 'Vote no Telegram' }}</p></section>{% endif %}
+  {% if part.contact %}<div class="attachment"><strong>Contato: {{ part.contact.name }}</strong><p>{{ part.contact.phone }}</p></div>{% endif %}
+  {% if part.location %}<div class="attachment"><strong>{{ part.location.title }}</strong>{% if part.location.address %}<p>{{ part.location.address }}</p>{% endif %}<a href="{{ part.location.url }}" target="_blank" rel="noopener noreferrer">Abrir localização no mapa ↗</a></div>{% endif %}
+  {% if part.unsupported %}<p class="muted">{{ part.unsupported }}</p>{% endif %}
+  {% for row in part.buttons %}<div class="message-buttons">{% for button in row %}{% if button.url %}<a class="secondary" href="{{ button.url }}" target="_blank" rel="noopener noreferrer">{{ button.text }} ↗</a>{% else %}<span class="inactive-button" title="Esta ação precisa ser realizada no Telegram">{{ button.text }} · no Telegram</span>{% endif %}{% endfor %}</div>{% endfor %}
+  {% if part.reactions %}<div class="message-reactions">{% for reaction in part.reactions %}<span>{{ reaction.emoji }} {{ reaction.count }}</span>{% endfor %}</div>{% endif %}
+  <div class="message-details"><small class="muted">{% if part.author %}{{ part.author }} · {% endif %}{% if part.views is not none %}{{ part.views }} visualizações · {% endif %}{% if part.edited %}Editada · {% endif %}{% if part.legacy %}Texto coletado antes do suporte à formatação{% endif %}</small>
+  <details class="original-action"><summary>{{ 'Recuperar original' if part.legacy else 'Atualizar do Telegram' }}</summary><p class="field-help">Busca o conteúdo atual desta mensagem e do álbum, se disponível. O grupo precisa estar selecionado.</p><form method="post" action="/offers/{{ part.id }}/refresh"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="alerts" value="{{ 'true' if alerts else 'false' }}"><button class="secondary">Recuperar original</button></form></details></div>
+</div>

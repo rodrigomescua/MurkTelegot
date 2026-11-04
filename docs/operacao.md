@@ -19,10 +19,16 @@ Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alteraç
 1. Pare o app e faça backup completo do diretório de dados; registre a tag atual da imagem.
 2. Troque a tag no Compose, execute `docker compose pull` e `docker compose up -d`.
 3. Confira `/health`, autenticação no painel, conexão Telegram e grupos selecionados. `/health` não atesta conectividade Telegram.
-4. Se precisar voltar, pare o app, restaure o backup e a tag anteriores e só então reinicie. A versão inicial não possui migrações de esquema.
+4. Se precisar voltar, pare o app, restaure o backup e a tag anteriores e só então reinicie. A migração de mensagens cria um snapshot SQLite em `offers.db.before-rich-messages.db` antes de adicionar colunas; restaure o backup completo anterior junto com a imagem antiga. Dados recebidos após o backup não estarão nele: preserve também uma cópia do volume atual antes de voltar.
 
 Preserve o volume: `docker compose down -v` remove os dados. A base ainda não possui limpeza automática; acompanhe espaço disponível. Uma sessão comprometida pode ser revogada em Telegram → Configurações → Dispositivos.
 
 ## Aviso conhecido do Telethon
 
 No Telethon 1.40.0, o aviso `Using async sessions support is an experimental feature` também é emitido durante o processamento assíncrono interno de atualizações, mesmo com sessão comum. Foi reproduzido sem rede; sozinho não indica falha de login. Não foi suprimido e a dependência não foi alterada. Verifique o estado no painel e eventuais erros adicionais.
+
+## Mídias e mensagens antigas
+
+Conteúdo original e metadados ficam no SQLite; mídia é obtida do Telegram no primeiro acesso e guardada em `/data/media`, acessível apenas mediante autenticação. O servidor mantém ao menos 64 MiB livres e interrompe downloads que excedam 120 segundos. Se o original tiver sido removido ou alterado antes do primeiro acesso, use o link do Telegram ou atualize a mensagem. Não há limpeza automática de mídia.
+
+Em mensagens coletadas antes desta versão, use **Recuperar original** para buscar individualmente o conteúdo atual e os itens do mesmo álbum, quando disponíveis no Telegram. O grupo deve estar selecionado; não há importação geral automática.

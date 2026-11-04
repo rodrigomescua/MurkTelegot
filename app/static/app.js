@@ -100,3 +100,37 @@ for (const time of document.querySelectorAll('time[datetime]')) {
     time.title = 'Horário local do seu navegador';
   }
 }
+
+
+function toggleSpoiler(target) {
+  const revealed = target.classList.toggle('revealed');
+  target.setAttribute('aria-expanded', String(revealed));
+  target.setAttribute('aria-label', revealed ? 'Ocultar spoiler' : 'Revelar spoiler');
+}
+document.addEventListener('click', (event) => {
+  const spoiler = event.target.closest('.spoiler');
+  if (spoiler) {
+    event.preventDefault();
+    toggleSpoiler(spoiler);
+  }
+});
+document.addEventListener('keydown', (event) => {
+  if (event.target.matches('.spoiler') && ['Enter', ' '].includes(event.key)) {
+    event.preventDefault();
+    toggleSpoiler(event.target);
+  }
+});
+document.addEventListener('error', (event) => {
+  if (event.target.matches?.('[data-message-media], .message-video, .message-video source, .message-audio')) {
+    const help = event.target.closest('.message-part').querySelector('.media-help');
+    if (help) help.hidden = false;
+  }
+}, true);
+
+document.addEventListener('submit', (event) => {
+  if (event.target.matches('form[action$="/refresh"]')) {
+    const button = event.target.querySelector('button');
+    button.disabled = true;
+    button.textContent = 'Recuperando…';
+  }
+});

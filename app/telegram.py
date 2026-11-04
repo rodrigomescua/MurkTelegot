@@ -1,7 +1,15 @@
 import asyncio
 import logging
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 
-from telethon import TelegramClient, events, errors
+from app.messages import media_info, message_link, source_data
+
+from telethon import TelegramClient, events, errors, utils
 
 log = logging.getLogger(__name__)
 
@@ -9,6 +17,8 @@ log = logging.getLogger(__name__)
 class Telegram:
     def __init__(self, store, data_dir, api_id, api_hash):
         self.store = store
+        self.media_dir = Path(data_dir) / 'media'
+        self.media_slots = asyncio.Semaphore(2)
         self.client = TelegramClient(str(data_dir / 'telegram'), int(api_id), api_hash) if api_id and api_hash else None
         self.phone = None
         self.code_hash = None
@@ -77,15 +87,81 @@ class Telegram:
         return [{'id': dialog.id, 'title': dialog.name or str(dialog.id)}
                 async for dialog in self.client.iter_dialogs() if dialog.is_group or dialog.is_channel]
 
+    def save_message(self, chat_id, message):
+        source = json.loads(message.to_json())
+        sender = getattr(message, 'sender', None)
+        if sender:
+            source['_sender_name'] = utils.get_display_name(sender)
+        return self.store.ingest(chat_id, message.id, message.raw_text,
+                                 message.date.isoformat(), message_link(chat_id, message.id),
+                                 source_json=json.dumps(source))
+
     async def receive(self, event):
         try:
-            message = event.message
-            chat_id = event.chat_id
             # Only selected chats are stored; private conversations never enter the database.
-            if not self.store.rows('SELECT id FROM chats WHERE id=?', (chat_id,)):
+            if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
                 return
-            url = f'https://t.me/c/{str(chat_id)[4:]}/{message.id}' if str(chat_id).startswith('-100') else None
-            self.store.ingest(chat_id, message.id, message.raw_text,
-                              message.date.isoformat(), url)
+            self.save_message(event.chat_id, event.message)
         except Exception:
-            log.exception('Failed to process a Telegram message')
+            log.warning('Failed to store a Telegram message; private content omitted from logs')
+
+    async def refresh(self, offer):
+        if not await self.authorized():
+            raise ValueError('Conecte a conta Telegram para recuperar o original.')
+        if not self.store.rows('SELECT id FROM chats WHERE id=?', (offer['chat_id'],)):
+            raise ValueError('Selecione este grupo novamente antes de recuperar o original.')
+        message = await self.client.get_messages(offer['chat_id'], ids=offer['message_id'])
+        if not message or not getattr(message, 'date', None):
+            raise ValueError('A mensagem não está mais disponível no Telegram.')
+        messages = [message]
+        if message.grouped_id:
+            neighbors = await self.client.get_messages(offer['chat_id'], ids=list(range(max(1, message.id - 9), message.id + 10)))
+            messages = [m for m in neighbors if m and getattr(m, 'grouped_id', None) == message.grouped_id]
+            if not any(m.id == message.id for m in messages):
+                messages.append(message)
+        for item in messages:
+            self.save_message(offer['chat_id'], item)
+
+    async def download(self, offer, thumbnail=False):
+        source = source_data(offer)
+        info = media_info(source)
+        if not info or info['kind'] == 'unsupported' or (thumbnail and not info['thumbnail']):
+            raise ValueError('Esta mídia não pode ser exibida aqui. Abra a mensagem no Telegram.')
+        key = hashlib.sha256(f"{offer['chat_id']}:{offer['message_id']}:{info['identity']}:{thumbnail}".encode()).hexdigest()
+        self.media_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = self.media_dir / key
+        if path.is_file():
+            return path
+        async with self.media_slots:
+            if path.is_file():
+                return path
+            if not await self.authorized():
+                raise ValueError('Conecte a conta Telegram para carregar esta mídia.')
+            message = await self.client.get_messages(offer['chat_id'], ids=offer['message_id'])
+            if not message:
+                raise ValueError('A mídia não está mais disponível no Telegram.')
+            current = media_info(json.loads(message.to_json()))
+            if not current or current.get('identity') != info['identity']:
+                raise ValueError('A mídia mudou no Telegram. Use Recuperar original para atualizar a oferta.')
+            reserve = 64 * 1024 * 1024
+            if not thumbnail and info['size'] > shutil.disk_usage(self.media_dir).free - reserve:
+                raise ValueError('Espaço insuficiente no servidor para carregar este arquivo.')
+
+            def progress(current, total):
+                if shutil.disk_usage(self.media_dir).free < reserve:
+                    raise OSError('Media cache disk reserve reached')
+
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(dir=self.media_dir, prefix='.download-', delete=False) as output:
+                    temporary = Path(output.name)
+                    async with asyncio.timeout(120):
+                        downloaded = await self.client.download_media(message, file=output,
+                            thumb=-1 if thumbnail else None, progress_callback=progress)
+                if downloaded is None or temporary.stat().st_size == 0:
+                    raise ValueError('Não foi possível carregar esta mídia. Abra no Telegram ou tente novamente.')
+                os.replace(temporary, path)
+            finally:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+            return path

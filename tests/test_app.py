@@ -182,7 +182,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
             store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
             store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
             telegram = Telegram(store, Path(directory), None, None)
-            message = SimpleNamespace(id=5, raw_text='Notebook em oferta', date=datetime.now(timezone.utc))
+            message = SimpleNamespace(id=5, raw_text='Notebook em oferta', date=datetime.now(timezone.utc), to_json=lambda: '{}')
             await telegram.receive(SimpleNamespace(chat_id=99, message=message))
             self.assertEqual(store.rows('SELECT * FROM offers'), [])
             await telegram.receive(SimpleNamespace(chat_id=-100123, message=message))

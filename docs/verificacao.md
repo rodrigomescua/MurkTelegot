@@ -14,7 +14,7 @@ Execute diretamente com Python; não use Docker/Compose nos testes deste ambient
 
 ## Evidências de 2026-11-04
 
-A suíte contém 19 testes: correspondência de palavras e acentos, seleção de fontes, transações e edições, autenticação, CSRF, escape HTML, busca, preservação de filtros, etapas de login/2FA, script de desenvolvimento e entrega HTTP dos assets de marca canônicos. O script aceita senhas de 12 caracteres e rejeita 11; o limite do app também foi verificado em processo separado.
+A suíte contém 35 testes: correspondência de palavras e acentos, seleção de fontes, transações e edições, autenticação, CSRF, escape HTML, busca, preservação de filtros, etapas de login/2FA, script de desenvolvimento entrega HTTP dos assets de marca canônicos, migração de banco, formatação segura, álbuns e mídia autenticada. O script aceita senhas de 12 caracteres e rejeita 11; o limite do app também foi verificado em processo separado.
 
 Uvicorn foi iniciado diretamente em uma verificação HTTP: health, painel autenticado e CSS responderam 200. Um teste manual automatizado com Chromium/Playwright verificou preservação dos campos em erros, telefone após recarregar, 2FA sem reenviar código, rascunho de regra durante o login, busca e seleção em 35 grupos simulados, layout com 390 px, ausência de erros JavaScript e ausência de segredos no armazenamento do navegador. Esse probe ficou fora do repositório e não faz parte do CI.
 
