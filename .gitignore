@@ -1,0 +1,15 @@
+.venv/
+.env
+.env.*
+.data/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.session*
+.codebase-memory/
+*.db
+*.sqlite
+*.sqlite3
+*.db-*
+*.sqlite-*
+*.sqlite3-*

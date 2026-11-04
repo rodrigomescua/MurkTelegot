@@ -1,0 +1,44 @@
+<section id="telegram-panel" aria-labelledby="telegram-title">
+  <h2 id="telegram-title">01 · Telegram <span class="badge">{{ 'Conectado' if authorized else ('Aguardando senha' if needs_password else ('Aguardando código' if code_pending else 'Desconectado')) }}</span></h2>
+  {% if authorized %}
+    <p>Sua conta está conectada. {{ chats|length }} grupos monitorados.</p>
+    <a class="button" href="/groups" data-autofocus>Selecionar grupos e canais</a>
+    {% if chats %}<details><summary>Ver grupos selecionados</summary><ul>{% for chat in chats %}<li>{{ chat.title }}</li>{% endfor %}</ul></details>{% endif %}
+  {% elif configured %}
+    <ol class="login-steps" aria-label="Etapas de conexão">
+      <li {% if not code_pending %}aria-current="step"{% endif %}>Telefone</li>
+      <li {% if code_pending and not needs_password %}aria-current="step"{% endif %}>Código</li>
+      <li {% if needs_password %}aria-current="step"{% endif %}>Conectar</li>
+    </ol>
+    {% if code_pending %}
+      <p class="muted">Código solicitado para <strong>{{ phone }}</strong>.</p>
+      <form method="post" action="/telegram/login" data-telegram>
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        {% if needs_password %}
+          <label for="telegram-password">Senha de verificação em duas etapas</label>
+          <input id="telegram-password" name="password" type="password" autocomplete="off" required maxlength="256" aria-describedby="password-help" data-autofocus>
+          <p class="field-help" id="password-help">É a senha da sua conta Telegram, diferente da senha deste painel. O código já foi aceito.</p>
+        {% else %}
+          <label for="code">Código recebido no Telegram</label>
+          <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="20" aria-describedby="code-help" data-autofocus>
+          <p class="field-help" id="code-help">Use o código mais recente. Não é necessário digitar seu telefone novamente.</p>
+        {% endif %}
+        <button>Conectar conta</button>
+      </form>
+      <details class="resend"><summary>Reenviar ou alterar telefone</summary>
+    {% else %}
+      <p>Comece pelo telefone da sua conta Telegram. Você poderá escolher os grupos após conectar.</p>
+    {% endif %}
+    <form method="post" action="/telegram/code" data-telegram>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="phone">Telefone com DDI</label>
+      <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="+5511999999999" value="{{ phone }}" required maxlength="30" aria-describedby="phone-help">
+      <p class="field-help" id="phone-help">Inclua +55 para números do Brasil.</p>
+      <button>{{ 'Enviar novo código' if code_pending else 'Solicitar código' }}</button>
+    </form>
+    {% if code_pending %}</details>{% endif %}
+    <p class="field-help">Telefone e etapa são mantidos enquanto o app está ligado. Códigos e senhas não são gravados no navegador.</p>
+  {% else %}
+    <p>Informe API ID e API hash ao executar <code>./run-dev.sh</code>, ou configure essas variáveis no Compose e reinicie o app.</p>
+  {% endif %}
+</section>

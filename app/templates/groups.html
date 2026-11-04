@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/">← Voltar ao painel</a></p>
+<h1>Escolha suas fontes.</h1>
+<p>Somente novas mensagens e edições dos grupos selecionados serão armazenadas. Desmarcar um grupo interrompe a coleta, mas preserva as ofertas existentes.</p>
+<section>
+  <form method="post" action="/groups" id="groups-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% if dialogs %}
+      <div class="group-tools" hidden>
+        <label for="group-search">Buscar grupo ou canal</label>
+        <input id="group-search" type="search" placeholder="Digite o nome do grupo…" autocomplete="off">
+        <div class="toolbar"><button type="button" class="secondary" id="select-visible">Selecionar visíveis</button><button type="button" class="secondary" id="clear-visible">Desmarcar visíveis</button></div>
+        <p class="muted" id="group-count" role="status" aria-live="polite"></p>
+        <p id="no-groups" hidden>Nenhum grupo corresponde à busca. Tente outro nome.</p>
+      </div>
+      <div class="groups">
+        {% for dialog in dialogs %}
+          <label class="check"><input type="checkbox" name="chat_ids" value="{{ dialog.id }}" {% if dialog.id in selected %}checked{% endif %}>{{ dialog.title }}</label>
+        {% endfor %}
+      </div>
+      <div class="save-bar"><button>Salvar seleção</button><a href="/">Cancelar</a><span class="muted" id="selection-status" role="status" aria-live="polite">Seleção salva. Altere os grupos e salve para aplicar.</span></div>
+    {% else %}
+      <p>Nenhum grupo disponível. Confira se sua conta está conectada.</p><a href="/">Voltar para a conexão Telegram</a>
+    {% endif %}
+  </form>
+</section>
+{% endblock %}
