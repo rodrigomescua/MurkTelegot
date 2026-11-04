@@ -263,32 +263,108 @@ if (feed) {
     if (busy) return;
     busy = true;
     try {
-      await loadPage(await fetch(`/?${query}`, {credentials: 'same-origin'}));
+      await loadPage(await fetch(`${feed.dataset.alerts === 'true' ? '/alerts' : '/'}?${query}`, {credentials: 'same-origin'}));
       await poll();
     } catch { toast('Não foi possível atualizar a lista. Tente novamente.', true); }
     finally { busy = false; }
   });
-  document.querySelector('#ignored-settings').addEventListener('submit', async (event) => {
+  feed.addEventListener('submit', async (event) => {
     const form = event.target;
+    if (!form.matches('[data-mark-seen]')) return;
     event.preventDefault();
     if (busy) return;
     busy = true;
     const button = event.submitter || form.querySelector('button');
-    const draft = document.querySelector('#ignored-word').value;
+    const cardId = form.closest('.offer-card').id;
     button.disabled = true;
+    let saved = false;
     try {
-      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), credentials: 'same-origin'});
-      const doc = await loadPage(response);
-      const nextMenu = doc.querySelector('#ignored-settings');
-      if (!nextMenu) throw new Error();
-      document.querySelector('#ignored-settings').innerHTML = nextMenu.innerHTML;
-      document.querySelector('#ignored-menu').open = true;
-      const message = doc.querySelector('[data-toast]')?.textContent || 'Filtro atualizado.';
-      if (!form.action.endsWith('/ignored') || message !== 'Palavra adicionada ao filtro.') document.querySelector('#ignored-word').value = draft;
-      toast(message);
+      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+      if (!response.ok || !(await response.json()).ok) throw new Error();
+      saved = true;
+      await loadPage(await fetch(`${feed.dataset.alerts === 'true' ? '/alerts' : '/'}?${query}`, {credentials: 'same-origin'}));
+      document.getElementById(cardId)?.querySelector('.offer-summary')?.focus();
+      toast('Alerta marcado como lido.');
       await poll();
-    } catch { toast('Não foi possível confirmar o filtro. Atualize a página e confira antes de tentar novamente.', true); }
-    finally { busy = false; button.disabled = false; }
+    } catch {
+      toast(saved ? 'Alerta marcado como lido, mas a lista não foi atualizada. Tente atualizar.' : 'Não foi possível confirmar a leitura. Atualize a lista para conferir.', true);
+    } finally { button.disabled = false; busy = false; }
   });
   setInterval(poll, 30000);
 }
+
+
+const ignoredSettings = document.querySelector('#ignored-settings');
+function filterIgnored() {
+  const search = document.querySelector('#ignored-search');
+  if (!search) return;
+  const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const rows = [...document.querySelectorAll('.ignored-list li')];
+  const term = normalize(search.value.trim());
+  rows.forEach((row) => { row.hidden = !normalize(row.querySelector('span').textContent).includes(term); });
+  const visible = rows.filter((row) => !row.hidden).length;
+  document.querySelector('#ignored-count').textContent = `${rows.length} palavras cadastradas · ${visible} visíveis`;
+  document.querySelector('#ignored-no-results').hidden = !term || visible > 0;
+}
+ignoredSettings?.addEventListener('input', (event) => { if (event.target.id === 'ignored-search') filterIgnored(); });
+async function updateIgnoredList() {
+  if (!ignoredSettings) return;
+  const search = document.querySelector('#ignored-search').value;
+  const response = await fetch('/ignored', {credentials: 'same-origin'});
+  if (!response.ok || response.redirected) throw new Error();
+  const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const next = doc.querySelector('#ignored-management');
+  if (!next) throw new Error();
+  document.querySelector('#ignored-management').innerHTML = next.innerHTML;
+  document.querySelector('#ignored-search').value = search;
+  filterIgnored();
+}
+async function submitQuick(form, button) {
+  button.disabled = true;
+  try {
+    const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      const error = form.querySelector('.quick-error');
+      if (error) { error.hidden = false; error.textContent = result.message || 'Não foi possível salvar.'; }
+      else toast(result.message || 'Não foi possível salvar.', true);
+      return;
+    }
+    const dialog = form.closest('dialog');
+    if (dialog) dialog.close();
+    if (form.matches('[action="/ignored"], [action="/rules"]')) form.reset();
+    toast(result.message);
+    try {
+      if (form.action.endsWith('/ignored') || form.action.includes('/ignored/')) {
+        await updateIgnoredList();
+        document.querySelector('#refresh-feed')?.click();
+      }
+      if (form.action.endsWith('/rules') && document.querySelector('#rules-list')) {
+        const page = await fetch('/', {credentials: 'same-origin'});
+        if (!page.ok || page.redirected) throw new Error();
+        const doc = new DOMParser().parseFromString(await page.text(), 'text/html');
+        document.querySelector('#rules-list').innerHTML = doc.querySelector('#rules-list').innerHTML;
+      }
+    } catch { toast('Alteração salva, mas não foi possível atualizar a tela. Recarregue para conferir.', true); }
+  } catch { toast('Não foi possível confirmar a operação. Confira a conexão e o resultado antes de tentar novamente.', true); }
+  finally { button.disabled = false; }
+}
+document.querySelectorAll('[data-quick]').forEach((link) => {
+  link.addEventListener('click', (event) => {
+    const dialog = document.getElementById(link.dataset.quick);
+    if (!dialog?.showModal) return;
+    event.preventDefault();
+    dialog.querySelector('.quick-error').hidden = true;
+    dialog.showModal();
+    dialog.querySelector('input:not([type="hidden"])').focus();
+  });
+});
+document.querySelectorAll('.quick-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog').close()));
+document.querySelectorAll('[data-quick-form]').forEach((form) => form.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitQuick(form, event.submitter || form.querySelector('button'));
+}));
+ignoredSettings?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitQuick(event.target, event.submitter || event.target.querySelector('button'));
+});

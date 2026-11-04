@@ -3,7 +3,6 @@
   {% if authorized %}
     <p>Sua conta está conectada. {{ chats|length }} grupos monitorados.</p>
     <a class="button" href="/groups" data-autofocus>Selecionar grupos e canais</a>
-    {% if chats %}<details><summary>Ver grupos selecionados</summary><ul>{% for chat in chats %}<li>{{ chat.title }}</li>{% endfor %}</ul></details>{% endif %}
   {% elif configured %}
     <ol class="login-steps" aria-label="Etapas de conexão">
       <li {% if not code_pending %}aria-current="step"{% endif %}>Telefone</li>

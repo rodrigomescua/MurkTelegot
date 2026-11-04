@@ -130,11 +130,17 @@ class Store:
         where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
         return where, args
 
-    def feed(self, q='', alerts=False, db=None):
+    def feed(self, q='', alerts=False, db=None, read=None):
         if db is None:
             with self.connect() as db:
-                return self.feed(q, alerts, db)
+                return self.feed(q, alerts, db, read)
         where, args = self.feed_filter(q, alerts)
+        if alerts and read is not None:
+            unread_album = '''EXISTS (SELECT 1 FROM offers m WHERE m.seen=0
+                AND EXISTS (SELECT 1 FROM hits WHERE offer_id=m.id)
+                AND (m.id=o.id OR (o.grouped_id IS NOT NULL AND m.chat_id=o.chat_id
+                                  AND m.grouped_id=o.grouped_id)))'''
+            where += ' AND ' + ('NOT ' if read else '') + unread_album
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
         selected = [dict(row) for row in db.execute(select + where + ' ORDER BY date DESC,id DESC LIMIT 100', args)]

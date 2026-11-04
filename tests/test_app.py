@@ -56,23 +56,59 @@ class WebTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.client = TestClient(main.app)
-        self.auth = ('admin', os.environ['APP_PASSWORD'])
+        self.auth = {'panel_session': 'test-session'}
+        main.sessions['test-session'] = __import__('time').monotonic() + 60
 
     def post(self, url, data=None):
-        return self.client.post(url, auth=self.auth, data={'csrf': main.csrf_token, **(data or {})})
+        return self.client.post(url, cookies=self.auth, data={'csrf': main.csrf_token, **(data or {})})
 
     def test_auth_csrf_and_dashboard(self):
-        self.assertEqual(self.client.get('/').status_code, 401)
-        self.assertEqual(self.client.get('/', auth=('admin', 'wrong')).status_code, 401)
+        self.assertEqual(self.client.get('/', follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get('/', cookies={'panel_session': 'wrong'}, follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.get('/health').status_code, 200)
-        response = self.client.get('/', auth=self.auth)
+        response = self.client.get('/', cookies=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertIn('Seu radar está pronto', response.text)
         self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
-        self.assertEqual(self.client.post('/rules', auth=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
+        self.assertEqual(self.client.post('/rules', cookies=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
+
+    def test_panel_login_session_logout_and_csrf(self):
+        page = self.client.get('/', follow_redirects=False)
+        self.assertEqual(page.headers['location'], '/login')
+        self.assertNotIn('www-authenticate', page.headers)
+        self.assertIn('Entre no seu painel', self.client.get('/login').text)
+        self.assertEqual(self.client.post('/login', data={'username': 'admin', 'panel_password': 'bad'}).status_code, 403)
+        invalid = self.client.post('/login', data={'csrf': main.csrf_token, 'username': 'admin', 'panel_password': 'wrong-secret'})
+        self.assertEqual(invalid.status_code, 401)
+        self.assertNotIn('wrong-secret', invalid.text)
+        login = self.client.post('/login', data={'csrf': main.csrf_token, 'username': 'admin', 'panel_password': main.password}, follow_redirects=False)
+        self.assertEqual(login.status_code, 303)
+        self.assertIn('HttpOnly', login.headers['set-cookie'])
+        self.assertIn('SameSite=strict', login.headers['set-cookie'])
+        self.assertNotIn(main.password, login.headers['set-cookie'])
+        session_cookie = self.client.cookies.get('panel_session')
+        self.assertEqual(self.client.get('/ignored').status_code, 200)
+        self.assertEqual(self.client.post('/logout').status_code, 403)
+        self.assertEqual(self.client.post('/logout', data={'csrf': main.csrf_token}, follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get('/ignored', follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get('/ignored', cookies={'panel_session': session_cookie}, follow_redirects=False).status_code, 303)
+        main.sessions['expired'] = 0
+        self.assertEqual(self.client.get('/ignored', cookies={'panel_session': 'expired'}, follow_redirects=False).status_code, 303)
+        self.assertNotIn('expired', main.sessions)
+        secure = self.client.post('https://testserver/login', data={'csrf': main.csrf_token, 'username': 'admin', 'panel_password': main.password}, follow_redirects=False)
+        self.assertIn('Secure', secure.headers['set-cookie'])
+
+    def test_quick_rule_validates_csrf_and_data(self):
+        headers = {'Accept': 'application/json'}
+        self.assertEqual(self.client.post('/rules', cookies=self.auth, headers=headers, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
+        invalid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'name': ' ', 'keywords': 'x'})
+        self.assertEqual(invalid.status_code, 400)
+        valid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'name': 'Café', 'keywords': 'café'})
+        self.assertTrue(valid.json()['ok'])
+        self.assertEqual(main.store.rows('SELECT name FROM rules'), [{'name': 'Café'}])
 
     def test_brand_assets_are_accessible_and_used_by_dashboard(self):
-        response = self.client.get('/', auth=self.auth)
+        response = self.client.get('/', cookies=self.auth)
         self.assertIn('src="/brand/logo.svg"', response.text)
         self.assertIn('href="/brand/logo-icon.svg"', response.text)
         self.assertIn('alt="MurkTelegot"', response.text)
@@ -86,7 +122,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.post('/rules', {'name': 'Café', 'keywords': 'café'}).status_code, 200)
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
         main.store.ingest(-100123, 1, '<script>alert(1)</script> café', '2026-11-04T12:00:00+00:00', 'https://t.me/c/123/1')
-        response = self.client.get('/?alerts=true', auth=self.auth)
+        response = self.client.get('/?alerts=true', cookies=self.auth)
         self.assertIn('Novo alerta', response.text)
         self.assertIn('&lt;script&gt;', response.text)
         self.assertNotIn('<script>', response.text)
@@ -99,7 +135,7 @@ class WebTests(unittest.TestCase):
         main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
         main.store.ingest(1, 1, 'Oferta 50% OFF', '2026-11-04', None)
         main.store.ingest(1, 2, 'Outro produto', '2026-11-04', None)
-        result = self.client.get('/', params={'q': '%'}, auth=self.auth)
+        result = self.client.get('/', params={'q': '%'}, cookies=self.auth)
         self.assertIn('50% OFF', result.text)
         self.assertNotIn('Outro produto', result.text)
 
@@ -119,9 +155,9 @@ class WebTests(unittest.TestCase):
         telegram.client.is_user_authorized.return_value = False
         telegram.client.send_code_request.return_value = SimpleNamespace(phone_code_hash='private-hash')
         with patch.object(main, 'telegram', telegram):
-            initial = self.client.get('/', auth=self.auth)
+            initial = self.client.get('/', cookies=self.auth)
             self.assertNotIn('name="code"', initial.text)
-            response = self.client.post('/telegram/code', auth=self.auth,
+            response = self.client.post('/telegram/code', cookies=self.auth,
                 headers={'Accept': 'application/json'},
                 data={'csrf': main.csrf_token, 'phone': '+5511999999999'})
             self.assertEqual(response.status_code, 200)
@@ -129,9 +165,9 @@ class WebTests(unittest.TestCase):
             self.assertIn('value="+5511999999999"', html)
             self.assertIn('name="code"', html)
             self.assertNotIn('private-hash', response.text)
-            self.assertIn('value="+5511999999999"', self.client.get('/', auth=self.auth).text)
+            self.assertIn('value="+5511999999999"', self.client.get('/', cookies=self.auth).text)
             telegram.client.sign_in.side_effect = errors.PhoneCodeInvalidError(None)
-            error = self.client.post('/telegram/login', auth=self.auth,
+            error = self.client.post('/telegram/login', cookies=self.auth,
                 headers={'Accept': 'application/json'},
                 data={'csrf': main.csrf_token, 'code': '99999', 'password': 'secret-value'})
             self.assertEqual(error.status_code, 400)
@@ -151,7 +187,7 @@ class WebTests(unittest.TestCase):
         telegram.phone, telegram.code_hash = '+5511999999999', 'private-hash'
         telegram.client.sign_in.side_effect = errors.SessionPasswordNeededError(None)
         with patch.object(main, 'telegram', telegram):
-            response = self.client.post('/telegram/login', auth=self.auth,
+            response = self.client.post('/telegram/login', cookies=self.auth,
                 headers={'Accept': 'application/json'},
                 data={'csrf': main.csrf_token, 'code': '12345'})
             self.assertEqual(response.status_code, 200)
@@ -160,17 +196,45 @@ class WebTests(unittest.TestCase):
             self.assertNotIn('12345', response.text)
 
     def test_mark_read_preserves_filter_search_and_position(self):
-        response = self.client.post('/offers/1/seen', auth=self.auth, follow_redirects=False,
+        response = self.client.post('/offers/1/seen', cookies=self.auth, follow_redirects=False,
             data={'csrf': main.csrf_token, 'q': 'café', 'alerts': 'true'})
         from urllib.parse import urlparse, parse_qs
         url = urlparse(response.headers['location'])
         self.assertEqual(parse_qs(url.query)['q'], ['café'])
-        self.assertEqual(parse_qs(url.query)['alerts'], ['true'])
-        self.assertEqual(url.fragment, 'offer-1')
+        self.assertEqual(url.path, '/alerts')
+        self.assertEqual(url.fragment, '')
+
+    def test_alert_page_separates_states_and_direct_mark_read(self):
+        main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        main.store.add_ignored('PS5')
+        first = main.store.ingest(1, 1, 'Notebook PS5', '2026-11-04', None)
+        second = main.store.ingest(1, 2, 'Notebook lido', '2026-11-04', None)
+        main.store.mark_seen(second)
+        page = self.client.get('/alerts', cookies=self.auth)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('Não lidos · 1', page.text)
+        self.assertIn('Lidos · 1', page.text)
+        self.assertIn('Notebook PS5', page.text)
+        self.assertIn('data-mark-seen', page.text)
+        self.assertNotIn('Notebook PS5', self.client.get('/', cookies=self.auth).text)
+        self.assertEqual(self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}).status_code, 403)
+        response = self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}, data={'csrf': main.csrf_token})
+        self.assertTrue(response.json()['ok'])
+        updated = self.client.get('/alerts', cookies=self.auth).text
+        self.assertIn('Não lidos · 0', updated)
+        self.assertIn('Lidos · 2', updated)
+        self.assertEqual(main.store.unread(), 0)
+        third = main.store.ingest(1, 3, 'Notebook fallback', '2026-11-04', None)
+        response = self.client.post(f'/offers/{third}/seen', cookies=self.auth, follow_redirects=False,
+            data={'csrf': main.csrf_token, 'q': 'Notebook', 'alerts': 'true'})
+        self.assertTrue(response.headers['location'].startswith('/alerts?'))
+        self.assertIn('q=Notebook', response.headers['location'])
+        self.assertEqual(main.store.unread(), 0)
 
     def test_empty_search_and_alerts_have_specific_guidance(self):
-        self.assertIn('Nenhuma oferta encontrada.', self.client.get('/?q=nothing', auth=self.auth).text)
-        self.assertIn('Nenhum alerta por enquanto.', self.client.get('/?alerts=true', auth=self.auth).text)
+        self.assertIn('Nenhuma oferta encontrada.', self.client.get('/?q=nothing', cookies=self.auth).text)
+        self.assertIn('Nenhum alerta não lido', self.client.get('/alerts', cookies=self.auth).text)
 
 class TelegramTests(unittest.IsolatedAsyncioTestCase):
     async def test_event_ingestion_ignores_private_and_handles_edits(self):

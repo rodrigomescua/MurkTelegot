@@ -2,12 +2,12 @@ import asyncio
 import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
@@ -27,14 +27,20 @@ if len(password) < 12 or password == 'SUBSTITUA-POR-UMA-SENHA-ALEATORIA-LONGA':
 store = Store(data_dir / 'offers.db')
 telegram = Telegram(store, data_dir, os.getenv('TELEGRAM_API_ID'), os.getenv('TELEGRAM_API_HASH'))
 csrf_token = secrets.token_urlsafe(32)
-security = HTTPBasic()
+sessions = {}
+SESSION_AGE = 12 * 60 * 60
 
 
-def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
-    user_ok = secrets.compare_digest(credentials.username.encode(), os.getenv('APP_USER', 'admin').encode())
-    pass_ok = secrets.compare_digest(credentials.password.encode(), password.encode())
-    if not (user_ok and pass_ok):
-        raise HTTPException(401, 'Credenciais inválidas', headers={'WWW-Authenticate': 'Basic'})
+def authenticate(request: Request):
+    token = request.cookies.get('panel_session', '')
+    expires = sessions.get(token, 0)
+    if expires > time.monotonic():
+        return
+    if token:
+        sessions.pop(token, None)
+    if 'application/json' in request.headers.get('accept', ''):
+        raise HTTPException(401, 'Sessão expirada. Entre novamente.')
+    raise HTTPException(303, headers={'Location': '/login'})
 
 
 async def csrf(request: Request):
@@ -72,12 +78,51 @@ async def health():
     return {'status': 'ok'}
 
 
+@app.get('/login')
+async def login_page(request: Request):
+    return templates.TemplateResponse(request, 'login.html', {'csrf': csrf_token, 'error': ''})
+
+
+@app.post('/login', dependencies=[Depends(csrf)])
+async def login(request: Request, username: str = Form(..., max_length=256),
+                panel_password: str = Form(..., max_length=256)):
+    user_ok = secrets.compare_digest(username.encode(), os.getenv('APP_USER', 'admin').encode())
+    pass_ok = secrets.compare_digest(panel_password.encode(), password.encode())
+    if not (user_ok and pass_ok):
+        return templates.TemplateResponse(request, 'login.html', {
+            'csrf': csrf_token, 'error': 'Usuário ou senha inválidos.', 'username': username,
+        }, status_code=401)
+    sessions.pop(request.cookies.get('panel_session', ''), None)
+    now = time.monotonic()
+    for token, expiry in list(sessions.items()):
+        if expiry <= now:
+            sessions.pop(token, None)
+    token = secrets.token_urlsafe(32)
+    sessions[token] = now + SESSION_AGE
+    response = RedirectResponse('/', status_code=303)
+    response.set_cookie('panel_session', token, max_age=SESSION_AGE, httponly=True,
+                        samesite='strict', secure=request.url.scheme == 'https')
+    return response
+
+
+@app.post('/logout', dependencies=[Depends(authenticate), Depends(csrf)])
+async def logout(request: Request):
+    sessions.pop(request.cookies.get('panel_session', ''), None)
+    response = RedirectResponse('/login', status_code=303)
+    response.delete_cookie('panel_session')
+    return response
+
+
+@app.get('/alerts', dependencies=[Depends(authenticate)])
 @app.get('/', dependencies=[Depends(authenticate)])
 async def dashboard(request: Request, alerts: bool = False, q: str = '', notice: str = ''):
+    alerts = alerts or request.url.path == '/alerts'
     with store.connect() as db:
         db.execute('BEGIN')
         marker = db.execute('SELECT coalesce(max(id), 0) FROM offers').fetchone()[0]
-        offers = store.feed(q, alerts, db)
+        unread_offers = store.feed(q, True, db, read=False) if alerts else []
+        read_offers = store.feed(q, True, db, read=True) if alerts else []
+        offers = unread_offers + read_offers if alerts else store.feed(q, False, db)
     for offer in offers:
         offer['parts'] = [present(part) for part in offer['parts']]
         offer['preview_lines'] = preview_lines(offer['parts'])
@@ -90,8 +135,7 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         'needs_password': telegram.needs_password,
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
         'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'),
-        'ignored_words': store.rows('SELECT id,word FROM ignored_keywords ORDER BY word COLLATE NOCASE'),
-        'offers': offers, 'marker': marker,
+        'offers': offers, 'unread_offers': unread_offers, 'read_offers': read_offers, 'marker': marker,
         'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
     })
@@ -106,7 +150,7 @@ async def new_offers(after: int = 0, q: str = '', alerts: bool = False):
 
 def redirect(notice='', *, q='', alerts=False, anchor=''):
     from urllib.parse import urlencode
-    return RedirectResponse('/?' + urlencode({'notice': notice, 'q': q, 'alerts': str(alerts).lower()}) + anchor, status_code=303)
+    return RedirectResponse(('/alerts?' if alerts else '/?') + urlencode({'notice': notice, 'q': q}) + anchor, status_code=303)
 
 
 @app.post('/telegram/{action}', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -187,11 +231,15 @@ async def save_groups(chat_ids: list[int] = Form(default=[])):
 
 
 @app.post('/rules', dependencies=[Depends(authenticate), Depends(csrf)])
-async def add_rule(name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
-    if not name.strip() or not any(w.strip() for w in keywords.split(',')):
-        return redirect('Informe um nome e pelo menos uma palavra-chave.')
-    store.execute('INSERT INTO rules(name, keywords) VALUES(?,?)', (name.strip(), keywords.strip()))
-    return redirect('Regra criada. Ela será aplicada às próximas mensagens e edições.')
+async def add_rule(request: Request, name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
+    valid = bool(name.strip() and any(w.strip() for w in keywords.split(',')))
+    if valid:
+        store.execute('INSERT INTO rules(name, keywords) VALUES(?,?)', (name.strip(), keywords.strip()))
+    message = ('Regra criada. Ela será aplicada às próximas mensagens e edições.' if valid
+               else 'Informe um nome e pelo menos uma palavra-chave.')
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': valid, 'message': message}, status_code=200 if valid else 400)
+    return redirect(message)
 
 
 @app.post('/rules/{rule_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -202,27 +250,45 @@ async def delete_rule(rule_id: int):
     return redirect('Regra removida.')
 
 
+@app.get('/ignored', dependencies=[Depends(authenticate)])
+async def ignored_page(request: Request, notice: str = ''):
+    return templates.TemplateResponse(request, 'ignored.html', {
+        'csrf': csrf_token, 'notice': notice,
+        'ignored_words': store.rows('SELECT id,word FROM ignored_keywords ORDER BY word COLLATE NOCASE'),
+    })
+
+
+def ignored_redirect(message):
+    from urllib.parse import urlencode
+    return RedirectResponse('/ignored?' + urlencode({'notice': message}), status_code=303)
+
+
 @app.post('/ignored', dependencies=[Depends(authenticate), Depends(csrf)])
-async def add_ignored(word: str = Form(..., max_length=100), q: str = Form('', max_length=200),
-                      alerts: bool = Form(False)):
+async def add_ignored(request: Request, word: str = Form(..., max_length=100)):
     try:
         added = store.add_ignored(word)
         message = 'Palavra adicionada ao filtro.' if added else 'Esta palavra já está no filtro.'
     except ValueError as exc:
-        message = str(exc)
-    return redirect(message, q=q, alerts=alerts, anchor='#ignored-menu')
+        added, message = False, str(exc)
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': added, 'message': message}, status_code=200 if added else 400)
+    return ignored_redirect(message)
 
 
 @app.post('/ignored/{word_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
-async def delete_ignored(word_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
+async def delete_ignored(request: Request, word_id: int):
     store.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
-    return redirect('Palavra removida do filtro.', q=q, alerts=alerts, anchor='#ignored-menu')
+    if 'application/json' in request.headers.get('accept', ''):
+        return {'ok': True, 'message': 'Palavra removida do filtro.'}
+    return ignored_redirect('Palavra removida do filtro.')
 
 
 @app.post('/offers/{offer_id}/seen', dependencies=[Depends(authenticate), Depends(csrf)])
-async def seen(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
+async def seen(request: Request, offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
     store.mark_seen(offer_id)
-    return redirect('Oferta marcada como lida.', q=q, alerts=alerts, anchor=f'#offer-{offer_id}')
+    if 'application/json' in request.headers.get('accept', ''):
+        return {'ok': True, 'message': 'Alerta marcado como lido.'}
+    return redirect('Alerta marcado como lido.', q=q, alerts=alerts)
 
 
 @app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])

@@ -35,3 +35,11 @@ Cards com capa, até duas linhas não vazias e expansão nativa conferidos no Ch
 ## Palavras ignoradas — 2026-11-04
 
 Testes verificam palavras inteiras com pontuação, início/fim e Unicode; termos parecidos; ignorar álbuns completos; independência dos alertas; remoção/persistência e filtro aplicado antes do limite. Menu, cadastro/remoção, listagem e alertas foram conferidos no Chromium com banco temporário, sem conta Telegram real.
+
+## Navegação, inclusão rápida e login do painel
+
+A suíte verifica login, saída, expiração, cookie seguro em HTTPS, CSRF e inclusão rápida. Um teste local com Chromium e dados temporários verificou login, saída, atalhos nas páginas, busca e remoção em uma lista com 230 palavras, preservação de rascunho e tela de 390 px. Não houve teste com Telegram real nem Docker nessa alteração.
+
+## Página de alertas
+
+Testes Python verificam separação antes do limite, álbuns parcialmente lidos, palavras ignoradas, CSRF e atualização de leitura. Chromium com dados temporários verificou busca, alteração direta no card, contador e modal em largura de 390 px. Não houve Telegram real ou Docker nesta verificação.

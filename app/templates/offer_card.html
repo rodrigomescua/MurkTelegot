@@ -1,0 +1,21 @@
+<article class="offer-card" id="offer-{{ offer.id }}">
+<details class="offer-detail">
+<summary class="offer-summary">
+<div class="offer-cover">
+{% if offer.cover and not offer.cover.media.spoiler %}
+<img src="/offers/{{ offer.cover.id }}/media{% if offer.cover.media.kind != 'photo' %}?thumbnail=true{% endif %}" alt="" loading="lazy" data-offer-cover>
+<div class="offer-placeholder" hidden><img src="/brand/logo-icon.svg" alt=""><span>Imagem indisponível</span></div>
+{% else %}<div class="offer-placeholder"><img src="/brand/logo-icon.svg" alt=""><span>{{ 'Mídia com spoiler' if offer.cover and offer.cover.media.spoiler else 'Sem imagem' }}</span></div>{% endif %}
+</div>
+<div class="offer-overview">
+<div class="meta"><strong>{{ offer.chat_title }}</strong><time datetime="{{ offer.date }}">{{ offer.date[:16]|replace('T', ' ') }} UTC</time></div>
+{% if offer.rules %}<span class="match">{{ 'Lido' if offer.seen else 'Novo alerta' }} · {{ offer.rules }}</span>{% endif %}
+<div class="offer-preview">{% for line in offer.preview_lines %}<span>{{ line }}</span>{% else %}<span class="muted">Oferta sem texto</span>{% endfor %}</div>
+{% if offer.parts|length > 1 %}<span class="album-label">Álbum · {{ offer.parts|length }} mensagens</span>{% endif %}
+<span class="offer-toggle"><span class="when-closed">Ver oferta completa ↗</span><span class="when-open">Recolher oferta ↑</span></span>
+</div>
+</summary>
+<div class="offer-expanded">
+<div class="message-content {{ 'album' if offer.parts|length > 1 else '' }}">{% for part in offer.parts %}{% include 'message.html' %}{% endfor %}</div>
+<div class="actions">{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer">Abrir no Telegram ↗</a>{% endif %}</div>
+</div></details>{% if offer.rules and not offer.seen %}<form class="card-seen" method="post" action="/offers/{{ offer.id }}/seen" data-mark-seen><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="alerts" value="{{ 'true' if alerts else 'false' }}"><button class="secondary" aria-label="Marcar alerta de {{ offer.chat_title }} como lido">✓ Marcar como lido</button></form>{% endif %}</article>

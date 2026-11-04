@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Palavras ignoradas</h1>
+<p>Ofertas com estas palavras ficam fora da listagem principal. Os alertas continuam funcionando. PS5 encontra (PS5), mas não PS5pro; caixa e acentos são ignorados.</p>
+{% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
+<section id="ignored-settings">
+<form method="post" action="/ignored"><input type="hidden" name="csrf" value="{{ csrf }}"><label for="ignored-word">Palavra ou expressão inteira</label><input id="ignored-word" name="word" placeholder="Ex.: PS5" required maxlength="100"><button>Adicionar palavra</button></form>
+<div id="ignored-management"><label for="ignored-search">Buscar nas palavras ignoradas</label><input id="ignored-search" type="search" placeholder="Buscar palavra…" autocomplete="off"><p class="muted" id="ignored-count" role="status">{{ ignored_words|length }} palavras cadastradas</p>
+{% if ignored_words %}<ul class="ignored-list">{% for word in ignored_words %}<li><span>{{ word.word }}</span><form method="post" action="/ignored/{{ word.id }}/delete"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary" aria-label="Remover palavra ignorada {{ word.word }}">Remover</button></form></li>{% endfor %}</ul>{% else %}<p class="muted">Nenhuma palavra ignorada.</p>{% endif %}<p id="ignored-no-results" hidden>Nenhuma palavra corresponde à busca.</p></div>
+</section>
+{% endblock %}

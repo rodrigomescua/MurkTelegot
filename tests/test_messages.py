@@ -240,32 +240,33 @@ class MediaWebTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.client = TestClient(main.app)
-        self.auth = ('admin', main.password)
+        self.auth = {'panel_session': 'test-session'}
+        main.sessions['test-session'] = __import__('time').monotonic() + 60
 
     def test_rich_caption_private_photo_and_legacy_recovery_action(self):
-        page = self.client.get('/', auth=self.auth)
+        page = self.client.get('/', cookies=self.auth)
         self.assertIn('<strong>Oferta</strong>', page.text)
         self.assertIn('src="/offers/1/media"', page.text)
-        self.assertEqual(self.client.get('/offers/1/media').status_code, 401)
-        self.assertEqual(self.client.get('/offers/999/media', auth=self.auth).status_code, 404)
-        self.assertEqual(self.client.post('/offers/1/refresh', auth=self.auth).status_code, 403)
+        self.assertEqual(self.client.get('/offers/1/media', follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.get('/offers/999/media', cookies=self.auth).status_code, 404)
+        self.assertEqual(self.client.post('/offers/1/refresh', cookies=self.auth).status_code, 403)
         image = self.root/'image'
         image.write_bytes(b'jpeg-data')
         with patch.object(self.main.telegram, 'download', AsyncMock(return_value=image)):
-            response = self.client.get('/offers/1/media', auth=self.auth)
+            response = self.client.get('/offers/1/media', cookies=self.auth)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers['content-type'], 'image/jpeg')
             self.assertEqual(response.content, b'jpeg-data')
-            partial = self.client.get('/offers/1/media', auth=self.auth, headers={'Range': 'bytes=0-3'})
+            partial = self.client.get('/offers/1/media', cookies=self.auth, headers={'Range': 'bytes=0-3'})
             self.assertEqual(partial.status_code, 206)
             self.assertEqual(partial.content, b'jpeg')
         with patch.object(self.main.telegram, 'download', AsyncMock(side_effect=ValueError('Mídia indisponível'))):
-            self.assertEqual(self.client.get('/offers/1/media', auth=self.auth).status_code, 409)
+            self.assertEqual(self.client.get('/offers/1/media', cookies=self.auth).status_code, 409)
         with patch.object(self.main.telegram, 'refresh', AsyncMock()):
-            response = self.client.post('/offers/1/refresh', auth=self.auth, follow_redirects=False,
+            response = self.client.post('/offers/1/refresh', cookies=self.auth, follow_redirects=False,
                 data={'csrf': self.main.csrf_token, 'q': 'Oferta', 'alerts': 'true'})
             self.assertEqual(response.status_code, 303)
-            self.assertIn('alerts=true', response.headers['location'])
+            self.assertTrue(response.headers['location'].startswith('/alerts?'))
             self.assertTrue(response.headers['location'].endswith('#message-1'))
 
     def test_untrusted_document_types_download_as_attachment_and_paths_are_not_used(self):
@@ -277,6 +278,6 @@ class MediaWebTests(unittest.TestCase):
         file = self.root/'document'
         file.write_bytes(b'<svg onload="evil()"/>')
         with patch.object(self.main.telegram, 'download', AsyncMock(return_value=file)):
-            response = self.client.get('/offers/1/media', auth=self.auth)
+            response = self.client.get('/offers/1/media', cookies=self.auth)
             self.assertEqual(response.headers['content-type'], 'application/octet-stream')
             self.assertTrue(response.headers['content-disposition'].startswith('attachment'))

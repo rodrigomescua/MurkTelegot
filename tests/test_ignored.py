@@ -76,6 +76,22 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual([o['message_id'] for o in self.store.feed()], [1])
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 111)
 
+    def test_read_sections_keep_album_together_and_filter_before_limit(self):
+        self.add_offer(1, 'Notebook parte 1', grouped=55)
+        self.add_offer(2, 'Notebook parte 2', grouped=55)
+        self.store.execute('UPDATE offers SET seen=1 WHERE message_id=1')
+        for i in range(3, 106):
+            self.add_offer(i, 'Notebook lido')
+            self.store.mark_seen(i)
+        unread = self.store.feed(alerts=True, read=False)
+        self.assertEqual(len(unread), 1)
+        self.assertEqual(len(unread[0]['parts']), 2)
+        self.assertFalse(unread[0]['seen'])
+        self.assertEqual(len(self.store.feed(alerts=True, read=True)), 100)
+        self.store.mark_seen(unread[0]['id'])
+        self.assertEqual(self.store.feed(alerts=True, read=False), [])
+        self.assertEqual(self.store.unread(), 0)
+
     def test_new_offers_respect_filters_and_count_albums_once(self):
         self.add_offer(1, 'Notebook antigo', grouped=11)
         marker = self.store.rows('SELECT max(id) AS id FROM offers')[0]['id']
@@ -115,46 +131,48 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.client = TestClient(main.app)
-        self.auth = ('admin', main.password)
+        self.auth = {'panel_session': 'test-session'}
+        main.sessions['test-session'] = __import__('time').monotonic() + 60
 
     def test_poll_requires_auth_and_reports_matching_new_offers(self):
-        self.assertEqual(self.client.get('/offers/new?after=1').status_code, 401)
+        self.assertEqual(self.client.get('/offers/new?after=1', headers={'Accept': 'application/json'}).status_code, 401)
         self.store.ingest(-100123, 2, 'Notebook', '2026-11-04', None)
-        self.assertEqual(self.client.get('/offers/new?after=1', auth=self.auth).json(), {'count': 1})
-        self.assertEqual(self.client.get('/offers/new?after=-1', auth=self.auth).status_code, 400)
+        self.assertEqual(self.client.get('/offers/new?after=1', cookies=self.auth).json(), {'count': 1})
+        self.assertEqual(self.client.get('/offers/new?after=-1', cookies=self.auth).status_code, 400)
 
     def test_collapsed_menu_auth_csrf_add_delete_and_alert_view(self):
-        page = self.client.get('/', auth=self.auth)
-        self.assertIn('<details id="ignored-menu">', page.text)
+        page = self.client.get('/', cookies=self.auth)
+        self.assertNotIn('id="ignored-settings"', page.text)
+        self.assertIn('id="ignored-settings"', self.client.get('/ignored', cookies=self.auth).text)
         self.assertIn('Palavras ignoradas', page.text)
-        self.assertEqual(self.client.post('/ignored', data={'word': 'PS5'}).status_code, 401)
-        self.assertEqual(self.client.post('/ignored', auth=self.auth, data={'word': 'PS5'}).status_code, 403)
+        self.assertEqual(self.client.post('/ignored', data={'word': 'PS5'}, follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post('/ignored', cookies=self.auth, data={'word': 'PS5'}).status_code, 403)
         data = {'word': 'PS5', 'csrf': main.csrf_token, 'q': 'Notebook', 'alerts': 'false'}
-        response = self.client.post('/ignored', auth=self.auth, data=data, follow_redirects=False)
+        response = self.client.post('/ignored', cookies=self.auth, data=data, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertIn('q=Notebook', response.headers['location'])
-        self.assertTrue(response.headers['location'].endswith('#ignored-menu'))
-        self.assertNotIn('class="offer-card"', self.client.get('/', auth=self.auth).text)
-        alerts = self.client.get('/?alerts=true', auth=self.auth)
+        self.assertTrue(response.headers['location'].startswith('/ignored?'))
+        self.assertNotIn('class="offer-card"', self.client.get('/', cookies=self.auth).text)
+        alerts = self.client.get('/?alerts=true', cookies=self.auth)
         self.assertIn('Notebook e PS5!', alerts.text)
         self.assertIn('Novo alerta', alerts.text)
-        duplicate = self.client.post('/ignored', auth=self.auth, data={**data, 'word': 'ps5'})
-        self.assertIn('já está no filtro', duplicate.text)
-        response = self.client.post('/ignored/1/delete', auth=self.auth,
+        duplicate = self.client.post('/ignored', cookies=self.auth, data={**data, 'word': 'ps5'}, headers={'Accept': 'application/json'})
+        self.assertEqual(duplicate.status_code, 400)
+        self.assertIn('já está no filtro', duplicate.json()['message'])
+        response = self.client.post('/ignored/1/delete', cookies=self.auth,
                                     data={'csrf': main.csrf_token, 'alerts': 'true', 'q': 'Notebook'},
                                     follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertIn('alerts=true', response.headers['location'])
-        self.assertTrue(response.headers['location'].endswith('#ignored-menu'))
-        self.assertIn('Notebook e PS5!', self.client.get('/', auth=self.auth).text)
+        self.assertTrue(response.headers['location'].startswith('/ignored?'))
+        self.assertIn('Notebook e PS5!', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.store.unread(), 1)
 
     def test_invalid_and_html_words_are_handled_safely(self):
         data = {'csrf': main.csrf_token, 'word': '   '}
-        response = self.client.post('/ignored', auth=self.auth, data=data)
-        self.assertIn('Informe uma palavra', response.text)
+        response = self.client.post('/ignored', cookies=self.auth, data=data, headers={'Accept': 'application/json'})
+        self.assertIn('Informe uma palavra', response.json()['message'])
         self.assertEqual(self.store.rows('SELECT * FROM ignored_keywords'), [])
-        response = self.client.post('/ignored', auth=self.auth,
-                                    data={'csrf': main.csrf_token, 'word': '<script>alert(1)</script>'})
+        response = self.client.post('/ignored', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'word': '<script>alert(1)</script>'}, follow_redirects=False)
+        response = self.client.get('/ignored', cookies=self.auth)
         self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', response.text)
         self.assertNotIn('<script>alert(1)</script>', response.text)

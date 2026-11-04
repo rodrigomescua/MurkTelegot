@@ -26,7 +26,8 @@ class OfferCardTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.client = TestClient(main.app)
-        self.auth = ('admin', main.password)
+        self.auth = {'panel_session': 'test-session'}
+        main.sessions['test-session'] = __import__('time').monotonic() + 60
 
     def add(self, message_id, text, source):
         return self.store.ingest(-100123, message_id, text, '2026-11-04',
@@ -49,7 +50,7 @@ class OfferCardTests(unittest.TestCase):
         source2 = {'grouped_id': 50}
         self.add(1, '\n \n', source1)
         self.add(2, '\nPrimeira linha\n\nSegunda linha\nTerceira linha', source2)
-        response = self.client.get('/', auth=self.auth)
+        response = self.client.get('/', cookies=self.auth)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.text.count('class="offer-card"'), 1)
         summary = re.search(r'<summary class="offer-summary">(.*?)</summary>', response.text, re.S).group(1)
@@ -66,7 +67,7 @@ class OfferCardTests(unittest.TestCase):
         source = {'media': {'_': 'MessageMediaPhoto', 'photo': {'_': 'Photo', 'id': 1}, 'spoiler': True},
                   'entities': [{'_': 'MessageEntitySpoiler', 'offset': 7, 'length': 7}]}
         self.add(1, body, source)
-        response = self.client.get('/', auth=self.auth)
+        response = self.client.get('/', cookies=self.auth)
         summary = re.search(r'<summary class="offer-summary">(.*?)</summary>', response.text, re.S).group(1)
         self.assertIn('Mídia com spoiler', summary)
         self.assertNotIn('/offers/1/media', summary)
@@ -76,7 +77,7 @@ class OfferCardTests(unittest.TestCase):
 
     def test_no_image_uses_placeholder_and_is_accessible(self):
         self.add(1, 'Só texto', {'_': 'Message'})
-        response = self.client.get('/', auth=self.auth)
+        response = self.client.get('/', cookies=self.auth)
         self.assertIn('Sem imagem', response.text)
         self.assertIn('<details class="offer-detail">', response.text)
         self.assertIn('Ver oferta completa', response.text)
