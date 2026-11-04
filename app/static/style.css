@@ -8,3 +8,6 @@
 .toast { position: fixed; z-index: 100; top: 1rem; right: 1rem; max-width: min(28rem, calc(100vw - 2rem)); padding: 1rem 1.2rem; border: 1px solid #2aabee; border-radius: .75rem; background: #132b3d; color: #fff; box-shadow: 0 .5rem 2rem #0008; }
 .toast.error { border-color: #ff8585; }
 .toast[hidden] { display: none; }
+
+.offer-modal{width:min(720px,calc(100% - 32px));max-height:calc(100% - 32px);padding:0;border:1px solid var(--border);border-radius:14px;background:var(--card);color:var(--text);box-shadow:0 16px 60px #000a}.offer-modal::backdrop{background:#000b}.modal-heading{position:sticky;top:0;z-index:1;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px;background:var(--card);border-bottom:1px solid var(--border)}.modal-heading h2{margin:0;overflow-wrap:anywhere}.modal-close{flex-shrink:0;margin:0}.offer-modal .offer-expanded{border:0;padding:0 20px 20px}
+.offer-toggle{display:inline-block;padding:9px 12px;border:1px solid var(--accent);border-radius:8px;font-weight:600}.offer-summary:hover .offer-toggle{background:var(--accent);color:var(--bg)}

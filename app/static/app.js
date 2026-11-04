@@ -138,6 +138,37 @@ document.addEventListener('submit', (event) => {
   }
 });
 
+// Details remains usable without JavaScript; with JavaScript its content opens in a native modal.
+const offerModal = document.createElement('dialog');
+offerModal.className = 'offer-modal';
+offerModal.setAttribute('aria-labelledby', 'offer-modal-title');
+offerModal.innerHTML = '<div class="modal-heading"><h2 id="offer-modal-title"></h2><button type="button" class="secondary modal-close" aria-label="Fechar oferta">Fechar ✕</button></div><div class="modal-content"></div>';
+document.body.append(offerModal);
+let modalDetail;
+let modalSummary;
+function showOffer(detail) {
+  if (offerModal.open) return;
+  modalDetail = detail;
+  modalSummary = detail.querySelector('.offer-summary');
+  offerModal.querySelector('#offer-modal-title').textContent = detail.querySelector('.meta strong').textContent;
+  offerModal.querySelector('.modal-content').append(detail.querySelector('.offer-expanded'));
+  offerModal.showModal();
+  offerModal.querySelector('.modal-close').focus();
+}
+offerModal.querySelector('.modal-close').addEventListener('click', () => offerModal.close());
+offerModal.addEventListener('close', () => {
+  const content = offerModal.querySelector('.offer-expanded');
+  content.querySelectorAll('video, audio').forEach((media) => media.pause());
+  modalDetail.append(content);
+  if (modalSummary.isConnected) modalSummary.focus();
+});
+document.addEventListener('click', (event) => {
+  const summary = event.target.closest('.offer-summary');
+  if (!summary) return;
+  event.preventDefault();
+  showOffer(summary.closest('.offer-detail'));
+});
+
 // Reopen the relevant offer or settings menu when following its anchor.
 function openAnchor() {
   if (!location.hash) return;
@@ -148,8 +179,8 @@ function openAnchor() {
   if (target?.matches('#ignored-menu')) target.open = true;
   const detail = target?.matches('.offer-card') ? target.querySelector('.offer-detail') : target?.closest('.offer-detail');
   if (detail) {
-    detail.open = true;
-    requestAnimationFrame(() => target.scrollIntoView());
+    showOffer(detail);
+    if (target !== detail.closest('.offer-card')) requestAnimationFrame(() => target.scrollIntoView({block: 'nearest'}));
   }
 }
 window.addEventListener('hashchange', openAnchor);
@@ -211,11 +242,9 @@ if (feed) {
   function applyPage(doc) {
     const next = doc.querySelector('#feed');
     if (!next) throw new Error();
-    const opened = [...document.querySelectorAll('.offer-card .offer-detail[open]')].map((item) => item.closest('.offer-card').id);
     feed.innerHTML = next.innerHTML;
     marker = Number(next.dataset.marker);
     generation++;
-    opened.forEach((id) => { const detail = document.getElementById(id)?.querySelector('.offer-detail'); if (detail) detail.open = true; });
     document.querySelector('#alert-counter').innerHTML = doc.querySelector('#alert-counter').innerHTML;
     document.querySelector('#feed-nav').innerHTML = doc.querySelector('#feed-nav').innerHTML;
     status.hidden = true;
