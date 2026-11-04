@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home app && mkdir /data && chown app:app /data
 COPY --chown=app:app app ./app
+COPY --chown=app:app assets/murktelegot-logo ./assets/murktelegot-logo
 USER app
 VOLUME ["/data"]
 EXPOSE 8000

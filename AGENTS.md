@@ -21,6 +21,8 @@ App pessoal para acompanhar ofertas em grupos e canais Telegram usando a conta d
 - `app/templates/` e `app/static/`: interface em português, HTML escapado, JavaScript progressivo e CSS local. Erros de login mantêm os campos no DOM; não grave segredos em armazenamento do navegador nem os reflita em respostas.
 - `tests/`: testes `unittest`, dados temporários e Telegram simulado. Não use a sessão ou o banco pessoal em verificações automatizadas.
 
+Identidade visual: os arquivos canônicos em `assets/murktelegot-logo/` são servidos por `/brand/` e copiados pelo Dockerfile. Não duplique os vetores em `app/static/`. Cabeçalho/favicon usam esses SVGs; a paleta do painel tem destaque `#2AABEE`, branco e fundos escuros azulados.
+
 ## Execução e verificação
 
 ```bash

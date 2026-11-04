@@ -71,6 +71,17 @@ class WebTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
         self.assertEqual(self.client.post('/rules', auth=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
 
+    def test_brand_assets_are_accessible_and_used_by_dashboard(self):
+        response = self.client.get('/', auth=self.auth)
+        self.assertIn('src="/brand/logo.svg"', response.text)
+        self.assertIn('href="/brand/logo-icon.svg"', response.text)
+        self.assertIn('alt="MurkTelegot"', response.text)
+        for name in ('logo.svg', 'logo-icon.svg'):
+            asset = self.client.get('/brand/' + name)
+            self.assertEqual(asset.status_code, 200)
+            self.assertIn('image/svg+xml', asset.headers['content-type'])
+            self.assertEqual(asset.content, (Path('assets/murktelegot-logo') / name).read_bytes())
+
     def test_rule_offer_alert_read_and_delete(self):
         self.assertEqual(self.post('/rules', {'name': 'Café', 'keywords': 'café'}).status_code, 200)
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
