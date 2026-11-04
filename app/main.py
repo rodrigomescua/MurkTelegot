@@ -283,6 +283,47 @@ async def delete_ignored(request: Request, word_id: int):
     return ignored_redirect('Palavra removida do filtro.')
 
 
+@app.get('/terms', dependencies=[Depends(authenticate)])
+def terms_page(request: Request, page: int = 1, notice: str = ''):
+    terms = store.frequent_terms()
+    pages = max(1, (len(terms) + 49) // 50)
+    page = max(1, min(page, pages))
+    return templates.TemplateResponse(request, 'terms.html', {
+        'csrf': csrf_token, 'notice': notice, 'terms': terms[(page - 1) * 50:page * 50],
+        'page': page, 'pages': pages, 'total': len(terms),
+        'hidden_terms': store.rows('SELECT id,word FROM hidden_suggestions ORDER BY word COLLATE NOCASE'),
+    })
+
+
+def term_reply(request, message, page):
+    if 'application/json' in request.headers.get('accept', ''):
+        return {'ok': True, 'message': message}
+    from urllib.parse import urlencode
+    return RedirectResponse('/terms?' + urlencode({'page': max(1, page), 'notice': message}), status_code=303)
+
+
+@app.post('/terms/{action}', dependencies=[Depends(authenticate), Depends(csrf)])
+def term_action(request: Request, action: str, word: str = Form(..., max_length=100), page: int = Form(1)):
+    try:
+        if action == 'ignore':
+            added = store.add_ignored(word)
+            message = 'Palavra adicionada ao filtro de ofertas.' if added else 'Esta palavra já está no filtro.'
+        elif action == 'hide':
+            added = store.hide_suggestion(word)
+            message = 'Sugestão ocultada desta lista.' if added else 'Esta sugestão já está oculta.'
+        else:
+            raise HTTPException(404)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return term_reply(request, message, page)
+
+
+@app.post('/terms/restore/{term_id}', dependencies=[Depends(authenticate), Depends(csrf)])
+def restore_term(request: Request, term_id: int, page: int = Form(1)):
+    store.execute('DELETE FROM hidden_suggestions WHERE id=?', (term_id,))
+    return term_reply(request, 'Sugestão restaurada.', page)
+
+
 @app.post('/offers/{offer_id}/seen', dependencies=[Depends(authenticate), Depends(csrf)])
 async def seen(request: Request, offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
     store.mark_seen(offer_id)

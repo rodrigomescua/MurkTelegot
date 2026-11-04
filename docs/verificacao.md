@@ -43,3 +43,7 @@ A suíte verifica login, saída, expiração, cookie seguro em HTTPS, CSRF e inc
 ## Página de alertas
 
 Testes Python verificam separação antes do limite, álbuns parcialmente lidos, palavras ignoradas, CSRF e atualização de leitura. Chromium com dados temporários verificou busca, alteração direta no card, contador e modal em largura de 390 px. Não houve Telegram real ou Docker nesta verificação.
+
+## Termos frequentes
+
+Testes com SQLite temporário verificam contagem por oferta e álbum, acentos, exclusão de URLs, persistência e restauração de sugestões, independência dos alertas, migração aditiva, paginação, autenticação e CSRF. Chromium em largura de 390 px verificou as duas ações, restauração e alertas preservados. Não houve teste com dados reais, Telegram ou Docker nesta alteração.

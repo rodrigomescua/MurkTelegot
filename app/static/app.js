@@ -337,6 +337,7 @@ async function submitQuick(form, button) {
     try {
       if (form.action.endsWith('/ignored') || form.action.includes('/ignored/')) {
         await updateIgnoredList();
+        await refreshTerms();
         document.querySelector('#refresh-feed')?.click();
       }
       if (form.action.endsWith('/rules') && document.querySelector('#rules-list')) {
@@ -367,4 +368,37 @@ document.querySelectorAll('[data-quick-form]').forEach((form) => form.addEventLi
 ignoredSettings?.addEventListener('submit', (event) => {
   event.preventDefault();
   submitQuick(event.target, event.submitter || event.target.querySelector('button'));
+});
+
+const termsContent = document.querySelector('#terms-content');
+async function refreshTerms() {
+  if (!termsContent) return;
+  const opened = document.querySelector('#hidden-terms').open;
+  const response = await fetch(`/terms?page=${encodeURIComponent(termsContent.dataset.page)}`, {credentials: 'same-origin'});
+  if (!response.ok || response.redirected) throw new Error();
+  const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const next = doc.querySelector('#terms-content');
+  if (!next) throw new Error();
+  termsContent.innerHTML = next.innerHTML;
+  termsContent.dataset.page = next.dataset.page;
+  document.querySelector('#hidden-terms').open = opened;
+}
+termsContent?.addEventListener('submit', async (event) => {
+  const form = event.target;
+  if (!form.matches('[data-term-action]')) return;
+  event.preventDefault();
+  const button = event.submitter || form.querySelector('button');
+  const buttons = [...termsContent.querySelectorAll('button')];
+  buttons.forEach((item) => { item.disabled = true; });
+  let saved = false;
+  try {
+    const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error();
+    saved = true;
+    await refreshTerms();
+    toast(result.message);
+  } catch {
+    toast(saved ? 'Alteração salva, mas não foi possível atualizar a lista. Recarregue a página.' : 'Não foi possível confirmar a operação. Atualize a página para conferir.', true);
+  } finally { buttons.forEach((item) => { item.disabled = false; }); button.disabled = false; }
 });

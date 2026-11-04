@@ -4,6 +4,8 @@ import re
 from contextlib import contextmanager
 import sqlite3
 import unicodedata
+from collections import Counter
+from itertools import groupby
 from pathlib import Path
 
 
@@ -46,6 +48,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS rules (
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ignored_keywords (
+                    id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
+                CREATE TABLE IF NOT EXISTS hidden_suggestions (
                     id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
                 CREATE TABLE IF NOT EXISTS offers (
                     id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
@@ -92,6 +96,50 @@ class Store:
             raise ValueError('Informe uma palavra ou expressão para ignorar.')
         with self.connect() as db:
             return db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
+                              (word, normalized)).rowcount == 1
+
+    def frequent_terms(self):
+        # Count each phrase once per offer, including an album's separate messages.
+        stopwords = {'a', 'as', 'ao', 'aos', 'o', 'os', 'um', 'uma', 'uns', 'umas',
+                     'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas',
+                     'e', 'ou', 'com', 'por', 'para', 'que', 'se', 'pra', 'pro'}
+        counts, examples = Counter(), {}
+        with self.connect() as db:
+            db.execute('BEGIN')
+            hidden = {row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions UNION SELECT normalized FROM ignored_keywords')}
+            rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY chat_id,grouped_id,id').fetchall()
+        key = lambda row: (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else (row['chat_id'], 'message', row['id'])
+        for _, parts in groupby(rows, key):
+            terms = {}
+            for part in parts:
+                body = unicodedata.normalize('NFC', re.sub(r'https?://\S+|www\.\S+', ' ', part['body'], flags=re.IGNORECASE))
+                tokens = list(re.finditer(r'[^\W_]+', body))
+                for i, first in enumerate(tokens):
+                    for size in (1, 2, 3):
+                        chunk = tokens[i:i + size]
+                        if len(chunk) != size:
+                            break
+                        if any(body[a.end():b.start()] != ' ' for a, b in zip(chunk, chunk[1:])):
+                            break
+                        word = body[first.start():chunk[-1].end()].casefold()
+                        normalized = normalize(word)
+                        if (len(word) <= 100 and len(normalized) > 1 and
+                            normalize(first.group()) not in stopwords and
+                            normalize(chunk[-1].group()) not in stopwords and normalized not in hidden):
+                            terms.setdefault(normalized, word)
+            counts.update(terms.keys())
+            for term, word in terms.items():
+                examples.setdefault(term, word)
+        return [{'word': examples[term], 'count': count} for term, count in
+                sorted(counts.items(), key=lambda item: (-item[1], item[0])) if count >= 2]
+
+    def hide_suggestion(self, word):
+        word = word.strip()
+        normalized = normalize(word).strip()
+        if not normalized:
+            raise ValueError('Informe um termo para ocultar.')
+        with self.connect() as db:
+            return db.execute('INSERT OR IGNORE INTO hidden_suggestions(word,normalized) VALUES(?,?)',
                               (word, normalized)).rowcount == 1
 
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None):
