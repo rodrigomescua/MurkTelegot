@@ -2,7 +2,7 @@
 
 ## Propósito e propriedade
 
-App pessoal para acompanhar ofertas em grupos e canais Telegram usando a conta do usuário. A raiz mantém código, testes, distribuição e documentação. Não há contratos filhos; este arquivo é o índice e contrato operacional para todo o repositório.
+App pessoal para acompanhar ofertas em grupos e canais Telegram usando a conta do usuário. A raiz mantém código, testes, distribuição, documentação e o pacote visual em `assets/`. Não há contratos filhos; este arquivo é o índice e contrato operacional para todo o repositório.
 
 ## Orientações de trabalho
 
@@ -53,4 +53,4 @@ Use somente `/home/rodrigo/Obsidian/Personal/Dev/Projetos/MurkTelegot`. Padrão 
 
 ## Índice de contratos filhos
 
-Nenhum. A raiz é responsável por `app/`, `tests/`, `docs/`, scripts e configuração de entrega.
+Nenhum. A raiz é responsável por `app/`, `tests/`, `docs/`, `assets/`, scripts e configuração de entrega.

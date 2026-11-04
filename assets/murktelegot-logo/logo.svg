@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" role="img" aria-labelledby="logo-title">
+  <title id="logo-title">MurkTelegot — ofertas do Telegram</title>
+  <g transform="translate(8 16)">
+  <path d="m23 66 43-43a12 12 0 0 1 9-4h25a10 10 0 0 1 10 10v25a12 12 0 0 1-4 9l-43 43a11 11 0 0 1-16 0L23 82a11 11 0 0 1 0-16Zm73-29a5 5 0 1 0-10 0 5 5 0 1 0 10 0Z" fill="#2AABEE" fill-rule="evenodd"/>
+  <g transform="translate(60 69) scale(0.85) translate(-64 -68)">
+  <path d="m40 67 42-18-10 40-14-13-8 8 2-13Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="2" stroke-linejoin="round"/>
+  <path d="m52 71 21-14-15 19" fill="none" stroke="#2AABEE" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  </g>
+  <text x="156" y="101" font-family="'Helvetica Neue', Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="-2"><tspan fill="#FFFFFF">Murk</tspan><tspan fill="#2AABEE">Telegot</tspan></text>
+</svg>
