@@ -14,7 +14,7 @@ Execute diretamente com Python; não use Docker/Compose nos testes deste ambient
 
 ## Evidências de 2026-11-04
 
-A suíte contém 35 testes: correspondência de palavras e acentos, seleção de fontes, transações e edições, autenticação, CSRF, escape HTML, busca, preservação de filtros, etapas de login/2FA, script de desenvolvimento entrega HTTP dos assets de marca canônicos, migração de banco, formatação segura, álbuns e mídia autenticada. O script aceita senhas de 12 caracteres e rejeita 11; o limite do app também foi verificado em processo separado.
+A suíte contém 47 testes: correspondência de palavras e acentos, seleção de fontes, transações e edições, autenticação, CSRF, escape HTML, busca, preservação de filtros, etapas de login/2FA, script de desenvolvimento entrega HTTP dos assets de marca canônicos, migração de banco, formatação segura, álbuns, mídia autenticada e prévias de cards sem revelar spoilers e filtro de palavras ignoradas independente de alertas. O script aceita senhas de 12 caracteres e rejeita 11; o limite do app também foi verificado em processo separado.
 
 Uvicorn foi iniciado diretamente em uma verificação HTTP: health, painel autenticado e CSS responderam 200. Um teste manual automatizado com Chromium/Playwright verificou preservação dos campos em erros, telefone após recarregar, 2FA sem reenviar código, rascunho de regra durante o login, busca e seleção em 35 grupos simulados, layout com 390 px, ausência de erros JavaScript e ausência de segredos no armazenamento do navegador. Esse probe ficou fora do repositório e não faz parte do CI.
 
@@ -27,3 +27,11 @@ Não há benchmark de desempenho nem teste de carga. O build e a execução de c
 ## Integração da identidade visual — 2026-11-04
 
 Logo no cabeçalho, favicon SVG e paleta azul verificados no Chromium, com a aplicação executada diretamente em Python e Telegram simulado. Layout desktop e largura de 320 px conferidos, sem transbordamento horizontal ou erros JavaScript. Repetidos os fluxos de login/2FA e seleção de 35 grupos. Contrastes calculados: texto do botão 7,06:1, links sobre cards 6,33:1, texto secundário 8,19:1 e bordas dos inputs 3,77:1. Esses checks não substituem uma auditoria completa de acessibilidade.
+
+## Grid de ofertas — 2026-11-04
+
+Cards com capa, até duas linhas não vazias e expansão nativa conferidos no Chromium com dados simulados, em desktop e 320 px. O teste cobriu álbuns, ausência/falha de imagem, spoilers, abertura pelo teclado e âncoras após marcar como lido ou recuperar mensagem. Nenhuma conta Telegram real foi acessada.
+
+## Palavras ignoradas — 2026-11-04
+
+Testes verificam palavras inteiras com pontuação, início/fim e Unicode; termos parecidos; ignorar álbuns completos; independência dos alertas; remoção/persistência e filtro aplicado antes do limite. Menu, cadastro/remoção, listagem e alertas foram conferidos no Chromium com banco temporário, sem conta Telegram real.

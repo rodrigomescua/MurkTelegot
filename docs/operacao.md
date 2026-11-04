@@ -12,7 +12,7 @@ Em repositório/pacote privado, autentique o servidor no GHCR com permissão de 
 
 Em desenvolvimento, os dados ficam em `.data/`; no container, em `/data`, montado pelo volume `murktelegot_data`. Guarde o diretório completo, incluindo banco de ofertas, sessão Telegram e eventuais arquivos auxiliares do SQLite. Pare o app antes de copiar o diretório para obter um backup consistente. Proteja também o backup, pois ele contém acesso à conta e mensagens privadas.
 
-Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alterações de grupos interrompem somente a coleta futura; as ofertas já salvas permanecem.
+Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alterações de grupos interrompem somente a coleta futura; as ofertas já salvas permanecem. Palavras ignoradas ficam no banco e só ocultam ofertas da listagem principal; não excluem ofertas ou alertas. A tabela é criada de forma aditiva; versões anteriores não aplicam o filtro, mas os dados permanecem no banco.
 
 ## Atualização e rollback
 

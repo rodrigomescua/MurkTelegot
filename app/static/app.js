@@ -134,3 +134,34 @@ document.addEventListener('submit', (event) => {
     button.textContent = 'Recuperando…';
   }
 });
+
+// Reopen the relevant offer or settings menu when following its anchor.
+function openAnchor() {
+  if (!location.hash) return;
+  const rawId = location.hash.slice(1);
+  let id = rawId;
+  try { id = decodeURIComponent(rawId); } catch {}
+  const target = document.getElementById(id);
+  if (target?.matches('#ignored-menu')) target.open = true;
+  const detail = target?.matches('.offer-card') ? target.querySelector('.offer-detail') : target?.closest('.offer-detail');
+  if (detail) {
+    detail.open = true;
+    requestAnimationFrame(() => target.scrollIntoView());
+  }
+}
+window.addEventListener('hashchange', openAnchor);
+openAnchor();
+document.addEventListener('error', (event) => {
+  if (event.target.matches?.('[data-offer-cover]')) {
+    event.target.hidden = true;
+    event.target.parentElement.querySelector('.offer-placeholder').hidden = false;
+  }
+}, true);
+
+// An image may fail before the deferred script attaches its error listener.
+for (const cover of document.querySelectorAll('[data-offer-cover]')) {
+  if (cover.complete && !cover.naturalWidth) {
+    cover.hidden = true;
+    cover.parentElement.querySelector('.offer-placeholder').hidden = false;
+  }
+}

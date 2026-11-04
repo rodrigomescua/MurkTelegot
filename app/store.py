@@ -17,6 +17,11 @@ def matches(text, keywords):
                for word in keywords.split(',') if word.strip())
 
 
+def ignored_matches(text, word):
+    # Underscore is punctuation for this filter; alert matching keeps its existing rules.
+    return bool(word and re.search(r'(?<![^\W_])' + re.escape(normalize(word)) + r'(?![^\W_])', normalize(text or '')))
+
+
 class Store:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -40,6 +45,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS rules (
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS ignored_keywords (
+                    id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
                 CREATE TABLE IF NOT EXISTS offers (
                     id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
                     chat_title TEXT NOT NULL, body TEXT NOT NULL, url TEXT,
@@ -64,6 +71,7 @@ class Store:
         db.row_factory = sqlite3.Row
         try:
             db.execute('PRAGMA foreign_keys=ON')
+            db.create_function('ignored_matches', 2, ignored_matches, deterministic=True)
             with db:
                 yield db
         finally:
@@ -76,6 +84,15 @@ class Store:
     def execute(self, sql, args=()):
         with self.connect() as db:
             db.execute(sql, args)
+
+    def add_ignored(self, word):
+        word = word.strip()
+        normalized = normalize(word).strip()
+        if not normalized:
+            raise ValueError('Informe uma palavra ou expressão para ignorar.')
+        with self.connect() as db:
+            return db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
+                              (word, normalized)).rowcount == 1
 
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None):
         grouped = json.loads(source_json).get('grouped_id') if source_json else None
@@ -101,6 +118,12 @@ class Store:
         clauses, args = [], []
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
+        else:
+            clauses.append('''NOT EXISTS (SELECT 1 FROM ignored_keywords k WHERE
+                ignored_matches(o.body,k.normalized) OR
+                (o.grouped_id IS NOT NULL AND EXISTS (SELECT 1 FROM offers m
+                    WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
+                      AND ignored_matches(m.body,k.normalized))))''')
         if q:
             clauses.append("body LIKE ? ESCAPE '\\'")
             args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')

@@ -88,6 +88,34 @@ def source_data(offer):
         return {}
 
 
+
+def preview_lines(parts):
+    """Keep two nonempty lines without exposing Telegram spoiler entities."""
+    lines = []
+    for part in parts:
+        text = add_surrogate(part.get('body') or '')
+        characters = list(text)
+        for entity in source_data(part).get('entities') or []:
+            if entity.get('_') != 'MessageEntitySpoiler':
+                continue
+            start, length = entity.get('offset'), entity.get('length')
+            if not isinstance(start, int) or not isinstance(length, int) or start < 0 or length <= 0 or start >= len(text):
+                continue
+            end = min(len(text), start + length)
+            if within_surrogate(text, start):
+                start -= 1
+            if within_surrogate(text, end):
+                end += 1
+            for offset in range(start, end):
+                if text[offset] not in ('\n', '\r'):
+                    characters[offset] = '•'
+        for line in del_surrogate(''.join(characters)).splitlines():
+            if line.strip():
+                lines.append(line.strip())
+                if len(lines) == 2:
+                    return lines
+    return lines
+
 def media_info(source):
     media = source.get('media') or {}
     if media.get('ttl_seconds') or media.get('view_once'):

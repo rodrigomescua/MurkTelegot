@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
-from app.messages import media_info, present, source_data
+from app.messages import media_info, present, preview_lines, source_data
 from app.store import Store
 from app.telegram import Telegram
 
@@ -77,13 +77,18 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
     offers = store.feed(q, alerts)
     for offer in offers:
         offer['parts'] = [present(part) for part in offer['parts']]
+        offer['preview_lines'] = preview_lines(offer['parts'])
+        offer['cover'] = next((part for part in offer['parts'] if part['media'] and
+                               (part['media']['kind'] == 'photo' or part['media'].get('thumbnail'))), None)
     return templates.TemplateResponse(request, 'index.html', {
         'csrf': csrf_token, 'authorized': await telegram.authorized(),
         'configured': bool(telegram.client), 'connection_error': telegram.error,
         'phone': telegram.phone or '', 'code_pending': bool(telegram.code_hash),
         'needs_password': telegram.needs_password,
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
-        'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'), 'offers': offers,
+        'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'),
+        'ignored_words': store.rows('SELECT id,word FROM ignored_keywords ORDER BY word COLLATE NOCASE'),
+        'offers': offers,
         'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
     })
@@ -185,6 +190,23 @@ async def delete_rule(rule_id: int):
         db.execute('DELETE FROM hits WHERE rule_id=?', (rule_id,))
         db.execute('DELETE FROM rules WHERE id=?', (rule_id,))
     return redirect('Regra removida.')
+
+
+@app.post('/ignored', dependencies=[Depends(authenticate), Depends(csrf)])
+async def add_ignored(word: str = Form(..., max_length=100), q: str = Form('', max_length=200),
+                      alerts: bool = Form(False)):
+    try:
+        added = store.add_ignored(word)
+        message = 'Palavra adicionada ao filtro.' if added else 'Esta palavra já está no filtro.'
+    except ValueError as exc:
+        message = str(exc)
+    return redirect(message, q=q, alerts=alerts, anchor='#ignored-menu')
+
+
+@app.post('/ignored/{word_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
+async def delete_ignored(word_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
+    store.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
+    return redirect('Palavra removida do filtro.', q=q, alerts=alerts, anchor='#ignored-menu')
 
 
 @app.post('/offers/{offer_id}/seen', dependencies=[Depends(authenticate), Depends(csrf)])
