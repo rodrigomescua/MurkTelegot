@@ -1,6 +1,6 @@
 # Primeira entrega
 
-Data: 2026-11-04. Estado: implementação inicial concluída. Imagem de produção depende de uma release futura.
+Data: 2026-11-04. Estado: implementação inicial concluída. Distribuição inicial: release `v0.0.1` e imagem `ghcr.io/rodrigomescua/murktelegot:0.0.1`, somente AMD64.
 
 ## Escopo e aceite
 

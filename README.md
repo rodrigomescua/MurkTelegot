@@ -4,7 +4,7 @@ Radar pessoal de ofertas do Telegram com painel web em português. Usa sua conta
 
 ## Produção: imagem pronta
 
-1. Publique o projeto no GitHub e crie uma release com tag semântica, por exemplo `v1.0.0`. O workflow testa o app e publica `ghcr.io/PROPRIETARIO/REPOSITORIO:1.0.0` e `:latest` para AMD64 e ARM64. Pre-releases não são publicadas. A publicação só acontece após os testes passarem.
+1. Publique o projeto no GitHub e crie uma release com tag semântica, por exemplo `v0.0.1`. O workflow testa o app e publica `ghcr.io/PROPRIETARIO/REPOSITORIO:0.0.1` e `:latest` para AMD64 (`linux/amd64`). Pre-releases não são publicadas. A publicação só acontece após os testes passarem.
 2. Copie apenas `docker-compose.yml` para o servidor. Edite `image` com o proprietário/repositório em minúsculas e a versão desejada. Se o pacote GHCR for privado, execute `docker login ghcr.io`; para distribuição sem login, configure a visibilidade pública do pacote no GitHub.
 3. No próprio Compose, substitua `APP_PASSWORD` por uma senha aleatória com pelo menos 12 caracteres e preencha `TELEGRAM_API_ID` e `TELEGRAM_API_HASH`, obtidos em <https://my.telegram.org/apps>. Mantenha as credenciais reais somente no servidor, fora do Git. Nenhum `.env` é usado em produção.
 4. Execute `docker compose pull` e `docker compose up -d`. Acesse <http://localhost:8000> com o usuário e a senha do Compose. Para servidor remoto, use um túnel SSH (`ssh -L 8000:127.0.0.1:8000 usuario@servidor`) ou proxy HTTPS com controle de acesso. A porta fica vinculada ao loopback por padrão.

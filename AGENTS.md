@@ -34,7 +34,7 @@ node --check app/static/app.js
 
 ## Distribuição
 
-O workflow `.github/workflows/release.yml` testa pushes em `main`/`master` e pull requests. Uma release estável publicada dispara, após testes, a publicação GHCR para AMD64/ARM64 com tags semânticas e `latest`. Push inicial não publica imagem. Não crie release nem altere visibilidade sem solicitação. Preserve o volume em atualizações; rollback restaura imagem e backup compatíveis.
+O workflow `.github/workflows/release.yml` testa pushes em `main`/`master` e pull requests. Uma release estável publicada dispara, após testes, a publicação GHCR para AMD64 (`linux/amd64`) com tags semânticas e `latest`. Push inicial não publica imagem. Não crie release nem altere visibilidade sem solicitação. Preserve o volume em atualizações; rollback restaura imagem e backup compatíveis.
 
 ## Documentação e decisões
 

@@ -4,7 +4,7 @@ A instalação e as variáveis estão no [README principal](../README.md#produç
 
 ## Publicação
 
-O push em `main` executa testes. Para gerar uma imagem, publique uma release estável com tag semântica, como `v1.0.0`. O workflow usa `GITHUB_TOKEN` com `packages: write` para publicar tags `1.0.0`, `1.0` e `latest` no GHCR, com o proprietário e nome do repositório em minúsculas. Pre-releases não publicam imagens.
+O push em `main` executa testes. Para gerar uma imagem, publique uma release estável com tag semântica, como `v0.0.1`. O workflow usa `GITHUB_TOKEN` com `packages: write` para publicar tags `0.0.1`, `0.0` e `latest` no GHCR, com o proprietário e nome do repositório em minúsculas. Pre-releases não publicam imagens.
 
 Em repositório/pacote privado, autentique o servidor no GHCR com permissão de leitura do pacote. O login local do painel e a autenticação do registry são credenciais distintas. Não altere a visibilidade do pacote como solução automática para falhas de autenticação.
 

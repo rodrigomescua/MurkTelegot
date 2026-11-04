@@ -22,4 +22,4 @@ O usuário confirmou o login real no Telegram. Essa confirmação é distinta do
 
 ## Limites
 
-Não há benchmark de desempenho nem teste de carga. O build e a execução de containers não foram feitos neste ambiente. Publicação real no GHCR e funcionamento da imagem em produção dependem de uma release futura. Consulte os resultados de cada push no GitHub Actions para confirmar a suíte em Python 3.12.
+Não há benchmark de desempenho nem teste de carga. O build e a execução de containers não foram feitos neste ambiente. A publicação GHCR é verificada no workflow da release; esse resultado não substitui testar a imagem no servidor de destino. Consulte os resultados de cada push no GitHub Actions para confirmar a suíte em Python 3.12.
