@@ -47,3 +47,7 @@ Testes Python verificam separação antes do limite, álbuns parcialmente lidos,
 ## Termos frequentes
 
 Testes com SQLite temporário verificam contagem por oferta e álbum, acentos, exclusão de URLs, persistência e restauração de sugestões, independência dos alertas, migração aditiva, paginação, autenticação e CSRF. Chromium em largura de 390 px verificou as duas ações, restauração e alertas preservados. Não houve teste com dados reais, Telegram ou Docker nesta alteração.
+
+## Ações em lote nos termos
+
+Testes com dados temporários verificam operações atômicas, validação, limite, CSRF, duplicatas, preservação de alertas e fallback sem JavaScript. Chromium em largura de 390 px verificou seleção, selecionar todos, ambas as ações e fallback sem JavaScript. Sem Telegram real ou Docker local.

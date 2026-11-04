@@ -142,6 +142,20 @@ class Store:
             return db.execute('INSERT OR IGNORE INTO hidden_suggestions(word,normalized) VALUES(?,?)',
                               (word, normalized)).rowcount == 1
 
+    def add_terms_batch(self, action, words):
+        if action not in ('ignore', 'hide'):
+            raise ValueError('Ação inválida.')
+        if not words or len(words) > 50:
+            raise ValueError('Selecione entre 1 e 50 termos desta página.')
+        items = [(word.strip(), normalize(word.strip()).strip()) for word in words]
+        if any(not normalized or len(word) > 100 for word, normalized in items):
+            raise ValueError('Os termos devem conter até 100 caracteres e não podem estar vazios.')
+        table = 'ignored_keywords' if action == 'ignore' else 'hidden_suggestions'
+        with self.connect() as db:
+            before = db.total_changes
+            db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items)
+            return db.total_changes - before
+
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None):
         grouped = json.loads(source_json).get('grouped_id') if source_json else None
         with self.connect() as db:

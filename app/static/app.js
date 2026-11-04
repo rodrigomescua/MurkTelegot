@@ -371,8 +371,27 @@ ignoredSettings?.addEventListener('submit', (event) => {
 });
 
 const termsContent = document.querySelector('#terms-content');
+function updateTermSelection() {
+  if (!termsContent) return;
+  const boxes = [...termsContent.querySelectorAll('input[name="words"]')];
+  const count = boxes.filter((box) => box.checked).length;
+  const selectAll = termsContent.querySelector('#terms-select-all');
+  if (!selectAll) return;
+  selectAll.parentElement.hidden = false;
+  selectAll.checked = count === boxes.length && count > 0;
+  selectAll.indeterminate = count > 0 && count < boxes.length;
+  document.querySelector('#terms-selected-count').textContent = `${count} ${count === 1 ? 'termo selecionado' : 'termos selecionados'} nesta página`;
+}
+termsContent?.addEventListener('change', (event) => {
+  if (event.target.id === 'terms-select-all') {
+    termsContent.querySelectorAll('input[name="words"]').forEach((box) => { box.checked = event.target.checked; });
+  }
+  if (event.target.id === 'terms-select-all' || event.target.name === 'words') updateTermSelection();
+});
+updateTermSelection();
 async function refreshTerms() {
   if (!termsContent) return;
+  const selected = new Set([...termsContent.querySelectorAll('input[name="words"]:checked')].map((box) => box.value));
   const opened = document.querySelector('#hidden-terms').open;
   const response = await fetch(`/terms?page=${encodeURIComponent(termsContent.dataset.page)}`, {credentials: 'same-origin'});
   if (!response.ok || response.redirected) throw new Error();
@@ -382,23 +401,31 @@ async function refreshTerms() {
   termsContent.innerHTML = next.innerHTML;
   termsContent.dataset.page = next.dataset.page;
   document.querySelector('#hidden-terms').open = opened;
+  termsContent.querySelectorAll('input[name="words"]').forEach((box) => { box.checked = selected.has(box.value); });
+  updateTermSelection();
 }
 termsContent?.addEventListener('submit', async (event) => {
   const form = event.target;
   if (!form.matches('[data-term-action]')) return;
   event.preventDefault();
   const button = event.submitter || form.querySelector('button');
-  const buttons = [...termsContent.querySelectorAll('button')];
-  buttons.forEach((item) => { item.disabled = true; });
+  const data = new FormData(form, button);
+  if (form.matches('[data-term-batch]') && !data.getAll('words').length) {
+    toast('Selecione pelo menos um termo desta página.', true);
+    return;
+  }
+  const controls = [...termsContent.querySelectorAll('button, input[type="checkbox"]')];
+  controls.forEach((item) => { item.disabled = true; });
   let saved = false;
   try {
-    const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+    const response = await fetch(form.getAttribute('action'), {method: 'POST', body: data, headers: {Accept: 'application/json'}, credentials: 'same-origin'});
     const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error();
+    if (!response.ok || !result.ok) { toast(result.message || 'Não foi possível salvar.', true); return; }
     saved = true;
+    if (form.matches('[data-term-batch]')) form.reset();
     await refreshTerms();
     toast(result.message);
   } catch {
     toast(saved ? 'Alteração salva, mas não foi possível atualizar a lista. Recarregue a página.' : 'Não foi possível confirmar a operação. Atualize a página para conferir.', true);
-  } finally { buttons.forEach((item) => { item.disabled = false; }); button.disabled = false; }
+  } finally { controls.forEach((item) => { item.disabled = false; }); }
 });

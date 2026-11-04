@@ -302,6 +302,19 @@ def term_reply(request, message, page):
     return RedirectResponse('/terms?' + urlencode({'page': max(1, page), 'notice': message}), status_code=303)
 
 
+@app.post('/terms/batch', dependencies=[Depends(authenticate), Depends(csrf)])
+def term_batch(request: Request, action: str = Form(...), words: list[str] = Form(default=[]), page: int = Form(1)):
+    try:
+        count = store.add_terms_batch(action, words)
+    except ValueError as exc:
+        if 'application/json' in request.headers.get('accept', ''):
+            return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
+        return term_reply(request, str(exc), page)
+    target = 'ao filtro de ofertas' if action == 'ignore' else 'às sugestões ocultas'
+    message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} {target}.'
+    return term_reply(request, message, page)
+
+
 @app.post('/terms/{action}', dependencies=[Depends(authenticate), Depends(csrf)])
 def term_action(request: Request, action: str, word: str = Form(..., max_length=100), page: int = Form(1)):
     try:

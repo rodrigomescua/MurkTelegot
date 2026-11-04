@@ -84,6 +84,46 @@ class FrequentTermsTests(unittest.TestCase):
             self.assertEqual(self.store.feed(), [])
             self.assertEqual(self.store.unread(), 2)
 
+    def test_batch_actions_are_atomic_and_preserve_alerts(self):
+        self.add(1, 'PS5 promoção preço baixo')
+        self.add(2, 'PS5 promoção preço baixo')
+        with self.assertRaises(ValueError):
+            self.store.add_terms_batch('hide', ['promoção', '   '])
+        self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
+        self.assertEqual(self.store.add_terms_batch('hide', ['promoção', 'PROMOCAO', 'preço baixo']), 2)
+        self.assertEqual(len(self.store.feed()), 2)
+        self.assertEqual(self.store.unread(), 2)
+        self.assertEqual(self.store.add_terms_batch('ignore', ['PS5', 'outro']), 2)
+        self.assertEqual(self.store.feed(), [])
+        self.assertEqual(self.store.unread(), 2)
+        with self.assertRaises(ValueError):
+            self.store.add_terms_batch('ignore', ['x'] * 51)
+        with self.assertRaises(ValueError):
+            self.store.add_terms_batch('wrong', ['x'])
+        self.assertEqual(len(self.store.rows('SELECT * FROM ignored_keywords')), 2)
+
+    def test_batch_endpoint_csrf_validation_and_fallback(self):
+        with patch.object(main, 'store', self.store):
+            client = TestClient(main.app)
+            token = 'test-batch-session'
+            main.sessions[token] = time.monotonic() + 60
+            self.addCleanup(main.sessions.pop, token, None)
+            cookies = {'panel_session': token}
+            headers = {'Accept': 'application/json'}
+            self.assertEqual(client.post('/terms/batch', cookies=cookies, data={'action': 'hide', 'words': ['PS5']}).status_code, 403)
+            empty = client.post('/terms/batch', cookies=cookies, headers=headers, data={'csrf': main.csrf_token, 'action': 'hide'})
+            self.assertEqual(empty.status_code, 400)
+            self.assertIn('Selecione', empty.json()['message'])
+            saved = client.post('/terms/batch', cookies=cookies, headers=headers, data={'csrf': main.csrf_token, 'action': 'hide', 'words': ['PS5', 'promoção']})
+            self.assertEqual(saved.status_code, 200)
+            self.assertIn('2 termos adicionados', saved.json()['message'])
+            self.assertEqual(len(self.store.rows('SELECT * FROM hidden_suggestions')), 2)
+            fallback = client.post('/terms/batch', cookies=cookies, follow_redirects=False,
+                data={'csrf': main.csrf_token, 'action': 'ignore', 'words': ['PS5', 'promoção'], 'page': '2'})
+            self.assertEqual(fallback.status_code, 303)
+            self.assertIn('page=2', fallback.headers['location'])
+            self.assertEqual(len(self.store.rows('SELECT * FROM ignored_keywords')), 2)
+
     def test_old_database_upgrade_is_additive_and_pagination(self):
         self.store.execute('DROP TABLE hidden_suggestions')
         self.add(1, ' '.join(f'produto{i}' for i in range(60)))
