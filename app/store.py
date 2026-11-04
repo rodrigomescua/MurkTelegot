@@ -114,7 +114,7 @@ class Store:
                     db.execute('INSERT INTO hits VALUES(?,?)', (offer_id, rule['id']))
             return offer_id
 
-    def feed(self, q='', alerts=False):
+    def feed_filter(self, q='', alerts=False):
         clauses, args = [], []
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
@@ -128,14 +128,21 @@ class Store:
             clauses.append("body LIKE ? ESCAPE '\\'")
             args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
         where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
+        return where, args
+
+    def feed(self, q='', alerts=False, db=None):
+        if db is None:
+            with self.connect() as db:
+                return self.feed(q, alerts, db)
+        where, args = self.feed_filter(q, alerts)
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
-        selected = self.rows(select + where + ' ORDER BY date DESC,id DESC LIMIT 100', args)
+        selected = [dict(row) for row in db.execute(select + where + ' ORDER BY date DESC,id DESC LIMIT 100', args)]
         keys = {(r['chat_id'], r['grouped_id']) for r in selected if r['grouped_id']}
         albums = {}
         if keys:
-            members = self.rows(select + 'WHERE ' + ' OR '.join('(chat_id=? AND grouped_id=?)' for _ in keys)
-                                + ' ORDER BY message_id', [value for key in keys for value in key])
+            members = [dict(row) for row in db.execute(select + 'WHERE ' + ' OR '.join('(chat_id=? AND grouped_id=?)' for _ in keys)
+                                + ' ORDER BY message_id', [value for key in keys for value in key])]
             for member in members:
                 albums.setdefault((member['chat_id'], member['grouped_id']), []).append(member)
         cards, added = [], set()
@@ -149,6 +156,14 @@ class Store:
                           'rules': ', '.join(dict.fromkeys(p['rules'] for p in parts if p['rules'])),
                           'seen': all(p['seen'] for p in parts if p['rules'])})
         return cards
+
+    def new_offers(self, after, q='', alerts=False):
+        where, args = self.feed_filter(q, alerts)
+        return self.rows('''SELECT count(*) AS n FROM (SELECT 1 FROM offers o ''' + where + '''
+            AND o.id > ? AND (o.grouped_id IS NULL OR NOT EXISTS (SELECT 1 FROM offers old
+                WHERE old.chat_id=o.chat_id AND old.grouped_id=o.grouped_id AND old.id<=?))
+            GROUP BY o.chat_id, CASE WHEN o.grouped_id IS NULL THEN 'm:' || o.id
+                                      ELSE 'g:' || o.grouped_id END)''', (*args, after, after))[0]['n']
 
     def unread(self):
         return self.rows('''SELECT count(*) AS n FROM (

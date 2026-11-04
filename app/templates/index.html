@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="heading"><div><p class="eyebrow">RADAR PESSOAL</p><h1>Ofertas que importam.</h1><p>Todos os seus grupos em um lugar. Alertas pelas palavras que você procura.</p></div><div class="counter"><strong>{{ unread }}</strong><span>alertas não lidos</span></div></div>
-{% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+<div class="heading"><div><p class="eyebrow">RADAR PESSOAL</p><h1>Ofertas que importam.</h1><p>Todos os seus grupos em um lugar. Alertas pelas palavras que você procura.</p></div><div class="counter" id="alert-counter"><strong>{{ unread }}</strong><span>alertas não lidos</span></div></div>
+{% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
 {% if connection_error %}<p class="notice" role="alert">{{ connection_error }}</p>{% endif %}
 <div class="layout"><aside>
 {% include 'telegram.html' %}
-<section class="ignored-settings">
+<section class="ignored-settings" id="ignored-settings">
 <details id="ignored-menu"><summary><strong>Palavras ignoradas</strong> · {{ ignored_words|length }}</summary>
 <p>Ofertas com estas palavras ficam fora da listagem principal. Os alertas continuam funcionando. PS5 encontra (PS5), mas não PS5pro; caixa e acentos são ignorados.</p>
 <form method="post" action="/ignored"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="q" value="{{ q }}"><input type="hidden" name="alerts" value="{{ 'true' if alerts else 'false' }}"><label for="ignored-word">Palavra ou expressão inteira</label><input id="ignored-word" name="word" placeholder="Ex.: PS5" required maxlength="100"><button>Adicionar palavra</button></form>
@@ -14,8 +14,8 @@
 
 <section id="rules"><h2>02 · Palavras-chave</h2><p>Separe alternativas por vírgula. Uma correspondência já gera alerta. Exemplo: café, cafeteira.</p><form method="post" action="/rules"><input type="hidden" name="csrf" value="{{ csrf }}"><label for="name">Nome da regra</label><input id="name" name="name" placeholder="Meu próximo notebook" required maxlength="100"><label for="keywords">Palavras ou expressões</label><input id="keywords" name="keywords" placeholder="thinkpad, macbook, notebook" required maxlength="1000"><button>Criar alerta</button></form>
 {% for rule in rules %}<div class="rule"><strong>{{ rule.name }}</strong><p>{{ rule.keywords }}</p><form method="post" action="/rules/{{ rule.id }}/delete" data-confirm="Remover esta regra? As ofertas salvas serão preservadas."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remover regra</button></form></div>{% endfor %}</section>
-</aside><div><nav><a class="{{ 'active' if not alerts else '' }}" href="/?q={{ q|urlencode }}" {% if not alerts %}aria-current="page"{% endif %}>Todas as ofertas</a><a class="{{ 'active' if alerts else '' }}" href="/?alerts=true&amp;q={{ q|urlencode }}" {% if alerts %}aria-current="page"{% endif %}>Meus alertas · {{ unread }}</a><a href="/?alerts={{ 'true' if alerts else 'false' }}&q={{ q|urlencode }}">Atualizar</a></nav>
-<form class="search" method="get"><input type="hidden" name="alerts" value="{{ 'true' if alerts else 'false' }}"><label class="sr-only" for="q">Buscar ofertas</label><input id="q" name="q" value="{{ q }}" placeholder="Buscar nas mensagens…" maxlength="200"><button>Buscar</button>{% if q %}<a href="/?alerts={{ 'true' if alerts else 'false' }}">Limpar busca</a>{% endif %}</form><p class="muted">{{ offers|length }} ofertas/álbuns exibidos · Até 100 mensagens recentes · Atualize para ver novas ofertas.</p>
+</aside><div><nav id="feed-nav"><a class="{{ 'active' if not alerts else '' }}" href="/?q={{ q|urlencode }}" {% if not alerts %}aria-current="page"{% endif %}>Todas as ofertas</a><a class="{{ 'active' if alerts else '' }}" href="/?alerts=true&amp;q={{ q|urlencode }}" {% if alerts %}aria-current="page"{% endif %}>Meus alertas · {{ unread }}</a><a href="/?alerts={{ 'true' if alerts else 'false' }}&q={{ q|urlencode }}" id="refresh-feed">Atualizar lista</a></nav>
+<form class="search" method="get"><input type="hidden" name="alerts" value="{{ 'true' if alerts else 'false' }}"><label class="sr-only" for="q">Buscar ofertas</label><input id="q" name="q" value="{{ q }}" placeholder="Buscar nas mensagens…" maxlength="200"><button>Buscar</button>{% if q %}<a href="/?alerts={{ 'true' if alerts else 'false' }}">Limpar busca</a>{% endif %}</form><p id="new-offers" class="notice" role="status" hidden></p><div id="feed" data-marker="{{ marker }}" data-q="{{ q }}" data-alerts="{{ 'true' if alerts else 'false' }}"><p class="muted">{{ offers|length }} ofertas/álbuns exibidos · Até 100 mensagens recentes.</p>
 {% if offers %}<div class="offer-grid">{% endif %}
 {% for offer in offers %}<article class="offer-card" id="offer-{{ offer.id }}">
 <details class="offer-detail">
@@ -43,5 +43,5 @@
 {% elif alerts %}<h2>Nenhum alerta por enquanto.</h2><p>As próximas mensagens que corresponderem às suas regras aparecerão aqui.</p><a href="#rules">Revisar palavras-chave</a>
 {% elif not authorized %}<div id="connect-guidance"><h2>Seu radar está pronto.</h2><p>Conecte sua conta, selecione os grupos e crie uma regra. As novas mensagens aparecerão aqui.</p><a class="button" href="#telegram-panel">Conectar Telegram</a></div>
 {% elif not chats %}<h2>Escolha os grupos para começar.</h2><p>Sua conta está conectada. Selecione os grupos e canais que deseja acompanhar.</p><a class="button" href="/groups">Selecionar grupos</a>
-{% else %}<h2>Nenhuma oferta para exibir.</h2><p>Novas mensagens aparecerão aqui. Ofertas com palavras ignoradas ficam fora desta lista, mas podem gerar alertas.</p><a href="#ignored-menu">Revisar palavras ignoradas</a>{% endif %}</section>{% endfor %}{% if offers %}</div>{% endif %}</div></div>
+{% else %}<h2>Nenhuma oferta para exibir.</h2><p>Novas mensagens aparecerão aqui. Ofertas com palavras ignoradas ficam fora desta lista, mas podem gerar alertas.</p><a href="#ignored-menu">Revisar palavras ignoradas</a>{% endif %}</section>{% endfor %}{% if offers %}</div>{% endif %}</div></div></div>
 {% endblock %}

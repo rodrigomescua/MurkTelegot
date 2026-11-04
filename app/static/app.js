@@ -39,7 +39,7 @@ document.addEventListener('submit', async (event) => {
       status.classList.add('error');
       status.focus();
     }
-    status.textContent = result.message || (typeof result.detail === 'string' ? result.detail : 'Não foi possível concluir. Confira os dados e tente novamente.');
+    toast(result.message || (typeof result.detail === 'string' ? result.detail : 'Não foi possível concluir. Confira os dados e tente novamente.'), !response.ok || !result.ok);
   } catch {
     status.classList.add('error');
     status.textContent = 'Não foi possível confirmar a operação. Seus campos foram mantidos. Confira a conexão e tente novamente.';
@@ -93,7 +93,8 @@ if (groupsForm && groupsForm.querySelector('.check')) {
   update();
 }
 
-for (const time of document.querySelectorAll('time[datetime]')) {
+function formatTimes(root) {
+for (const time of root.querySelectorAll('time[datetime]')) {
   const date = new Date(time.dateTime);
   if (!Number.isNaN(date.getTime())) {
     time.textContent = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
@@ -101,6 +102,8 @@ for (const time of document.querySelectorAll('time[datetime]')) {
   }
 }
 
+}
+formatTimes(document);
 
 function toggleSpoiler(target) {
   const revealed = target.classList.toggle('revealed');
@@ -159,9 +162,104 @@ document.addEventListener('error', (event) => {
 }, true);
 
 // An image may fail before the deferred script attaches its error listener.
-for (const cover of document.querySelectorAll('[data-offer-cover]')) {
+function checkCovers(root) {
+for (const cover of root.querySelectorAll('[data-offer-cover]')) {
   if (cover.complete && !cover.naturalWidth) {
     cover.hidden = true;
     cover.parentElement.querySelector('.offer-placeholder').hidden = false;
   }
+}
+
+}
+checkCovers(document);
+
+function toast(message, error = false) {
+  const item = document.querySelector('#action-status');
+  item.textContent = message;
+  item.hidden = false;
+  item.classList.toggle('error', error);
+  clearTimeout(item.toastTimer);
+  item.toastTimer = setTimeout(() => { item.hidden = true; }, 5000);
+}
+const initialToast = document.querySelector('[data-toast]');
+if (initialToast) setTimeout(() => initialToast.remove(), 5000);
+
+// Keep the rest of the dashboard, including unfinished forms, intact.
+const feed = document.querySelector('#feed');
+if (feed) {
+  let marker = Number(feed.dataset.marker);
+  let busy = false;
+  let generation = 0;
+  const status = document.querySelector('#new-offers');
+  const refresh = document.querySelector('#refresh-feed');
+  const query = new URLSearchParams({q: feed.dataset.q, alerts: feed.dataset.alerts});
+  async function poll() {
+    const current = generation;
+    try {
+      const response = await fetch(`/offers/new?${query}&after=${marker}`, {credentials: 'same-origin'});
+      if (!response.ok) throw new Error();
+      const {count} = await response.json();
+      if (current !== generation) return;
+      status.hidden = !count;
+      status.textContent = count ? `${count} ${count === 1 ? 'nova oferta' : 'novas ofertas'} disponível${count === 1 ? '' : 'is'}. Use Atualizar lista para exibir.` : '';
+    } catch {
+      if (current !== generation) return;
+      status.hidden = false;
+      status.textContent = 'Não foi possível verificar novas ofertas. A próxima tentativa será automática.';
+    }
+  }
+  function applyPage(doc) {
+    const next = doc.querySelector('#feed');
+    if (!next) throw new Error();
+    const opened = [...document.querySelectorAll('.offer-card .offer-detail[open]')].map((item) => item.closest('.offer-card').id);
+    feed.innerHTML = next.innerHTML;
+    marker = Number(next.dataset.marker);
+    generation++;
+    opened.forEach((id) => { const detail = document.getElementById(id)?.querySelector('.offer-detail'); if (detail) detail.open = true; });
+    document.querySelector('#alert-counter').innerHTML = doc.querySelector('#alert-counter').innerHTML;
+    document.querySelector('#feed-nav').innerHTML = doc.querySelector('#feed-nav').innerHTML;
+    status.hidden = true;
+    formatTimes(feed);
+    checkCovers(feed);
+  }
+  async function loadPage(response) {
+    if (!response.ok) throw new Error();
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    applyPage(doc);
+    return doc;
+  }
+  document.querySelector('#feed-nav').addEventListener('click', async (event) => {
+    if (!event.target.closest('#refresh-feed')) return;
+    event.preventDefault();
+    if (busy) return;
+    busy = true;
+    try {
+      await loadPage(await fetch(`/?${query}`, {credentials: 'same-origin'}));
+      await poll();
+    } catch { toast('Não foi possível atualizar a lista. Tente novamente.', true); }
+    finally { busy = false; }
+  });
+  document.querySelector('#ignored-settings').addEventListener('submit', async (event) => {
+    const form = event.target;
+    event.preventDefault();
+    if (busy) return;
+    busy = true;
+    const button = event.submitter || form.querySelector('button');
+    const draft = document.querySelector('#ignored-word').value;
+    button.disabled = true;
+    try {
+      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), credentials: 'same-origin'});
+      const doc = await loadPage(response);
+      const nextMenu = doc.querySelector('#ignored-settings');
+      if (!nextMenu) throw new Error();
+      document.querySelector('#ignored-settings').innerHTML = nextMenu.innerHTML;
+      document.querySelector('#ignored-menu').open = true;
+      const message = doc.querySelector('[data-toast]')?.textContent || 'Filtro atualizado.';
+      if (!form.action.endsWith('/ignored') || message !== 'Palavra adicionada ao filtro.') document.querySelector('#ignored-word').value = draft;
+      toast(message);
+      await poll();
+    } catch { toast('Não foi possível confirmar o filtro. Atualize a página e confira antes de tentar novamente.', true); }
+    finally { busy = false; button.disabled = false; }
+  });
+  setInterval(poll, 30000);
 }

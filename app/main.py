@@ -74,7 +74,10 @@ async def health():
 
 @app.get('/', dependencies=[Depends(authenticate)])
 async def dashboard(request: Request, alerts: bool = False, q: str = '', notice: str = ''):
-    offers = store.feed(q, alerts)
+    with store.connect() as db:
+        db.execute('BEGIN')
+        marker = db.execute('SELECT coalesce(max(id), 0) FROM offers').fetchone()[0]
+        offers = store.feed(q, alerts, db)
     for offer in offers:
         offer['parts'] = [present(part) for part in offer['parts']]
         offer['preview_lines'] = preview_lines(offer['parts'])
@@ -88,10 +91,17 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
         'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'),
         'ignored_words': store.rows('SELECT id,word FROM ignored_keywords ORDER BY word COLLATE NOCASE'),
-        'offers': offers,
+        'offers': offers, 'marker': marker,
         'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
     })
+
+
+@app.get('/offers/new', dependencies=[Depends(authenticate)])
+async def new_offers(after: int = 0, q: str = '', alerts: bool = False):
+    if after < 0 or len(q) > 200:
+        raise HTTPException(400, 'Filtro inválido.')
+    return {'count': store.new_offers(after, q, alerts)}
 
 
 def redirect(notice='', *, q='', alerts=False, anchor=''):

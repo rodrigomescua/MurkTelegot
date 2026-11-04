@@ -76,6 +76,20 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual([o['message_id'] for o in self.store.feed()], [1])
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 111)
 
+    def test_new_offers_respect_filters_and_count_albums_once(self):
+        self.add_offer(1, 'Notebook antigo', grouped=11)
+        marker = self.store.rows('SELECT max(id) AS id FROM offers')[0]['id']
+        self.store.add_ignored('PS5')
+        self.add_offer(2, 'Notebook parte antiga', grouped=11)
+        self.add_offer(3, 'Notebook novo', grouped=12)
+        self.add_offer(4, 'Outra parte', grouped=12)
+        self.add_offer(5, 'Notebook PS5')
+        self.add_offer(6, 'Oferta diferente')
+        self.assertEqual(self.store.new_offers(marker), 2)
+        self.assertEqual(self.store.new_offers(marker, 'Notebook'), 1)
+        self.assertEqual(self.store.new_offers(marker, alerts=True), 2)
+        self.assertEqual(self.store.new_offers(marker, 'Notebook', True), 2)
+
     def test_persistence_and_additive_migration_preserve_existing_data(self):
         self.add_offer(1, 'Notebook PS5')
         self.store.execute('DROP TABLE ignored_keywords')
@@ -102,6 +116,12 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.addCleanup(self.patch.stop)
         self.client = TestClient(main.app)
         self.auth = ('admin', main.password)
+
+    def test_poll_requires_auth_and_reports_matching_new_offers(self):
+        self.assertEqual(self.client.get('/offers/new?after=1').status_code, 401)
+        self.store.ingest(-100123, 2, 'Notebook', '2026-11-04', None)
+        self.assertEqual(self.client.get('/offers/new?after=1', auth=self.auth).json(), {'count': 1})
+        self.assertEqual(self.client.get('/offers/new?after=-1', auth=self.auth).status_code, 400)
 
     def test_collapsed_menu_auth_csrf_add_delete_and_alert_view(self):
         page = self.client.get('/', auth=self.auth)
