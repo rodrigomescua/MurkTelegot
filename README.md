@@ -35,6 +35,7 @@ O script cria `.venv` e instala as dependências se necessário, solicita API ID
 ## Comportamento
 
 - Captura mensagens e edições dos grupos selecionados, inclusive fotos sem legenda. Preserva texto, entidades e metadados originais; álbuns aparecem agrupados. Não importa histórico automaticamente nem garante recuperar o intervalo em que ficou desligado.
+- Selecione um texto na tela para criar um alerta ou ignorar ofertas com um toque. A seleção aceita até 100 caracteres; para criar alerta, selecione um trecho sem vírgula. A regra recebe o trecho como nome e palavra-chave e vale para próximas mensagens e edições. Em celulares, toque e segure para selecionar o texto.
 - Os botões flutuantes permitem adicionar alertas e palavras ignoradas em qualquer página. O menu **Grupos** abre a seleção de fontes.
 - Regras usam alternativas separadas por vírgula, sem distinguir maiúsculas e acentos, com limite de palavra. `café, cafeteira` encontra qualquer uma; `rtx 4060` procura essa expressão. Não há regex. Regras novas valem para mensagens futuras e futuras edições, sem reprocessar histórico.
 - Na página **Palavras ignoradas**, que possui busca para listas extensas, cadastre termos ou expressões para ocultar ofertas da listagem principal. A comparação ignora caixa e acentos e exige limites de palavra: `PS5`, `(PS5)` e `PS5!` correspondem; `PS5pro` e `PS55` não. A regra se aplica a ofertas existentes e novas, incluindo o álbum inteiro quando alguma parte corresponde. Os alertas continuam sendo criados e exibidos normalmente.

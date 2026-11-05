@@ -71,3 +71,7 @@ Testes simulam respostas HTTP, falhas de DNS, timeout, conexão recusada e TLS, 
 ## Índice da tela principal
 
 Teste com banco temporário verifica criação aditiva do índice em banco existente, preservação de dados e uso pelo SQLite. Os testes existentes verificam busca, ignorados antes do limite e agrupamento. Uma [medição com dados sintéticos](performance/README.md) compara a consulta com e sem o índice; não houve medição em produção.
+
+## Ações por seleção de texto
+
+Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_selection.py` (ou defina `PLAYWRIGHT_CHROMIUM_EXECUTABLE` para um executável Chromium disponível). O teste cria dados temporários, usa viewport de 390 px e toque simulado, e verifica criação direta, filtro no modal, rascunhos, erros, limites, campos sensíveis e spoilers. A seleção é criada pela API do navegador; o gesto de pressionar e segurar e o menu nativo de dispositivos reais não foram testados.

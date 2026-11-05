@@ -161,10 +161,14 @@ offerModal.addEventListener('close', () => {
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
   modalDetail.append(content);
   if (modalSummary.isConnected) modalSummary.focus();
+  const status = document.querySelector('#action-status');
+  if (offerModal.contains(status)) document.querySelector('main').prepend(status);
 });
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
   if (!summary) return;
+  const selection = window.getSelection();
+  if (selection && !selection.isCollapsed && summary.contains(selection.anchorNode)) return;
   event.preventDefault();
   showOffer(summary.closest('.offer-detail'));
 });
@@ -429,3 +433,121 @@ termsContent?.addEventListener('submit', async (event) => {
     toast(saved ? 'Alteração salva, mas não foi possível atualizar a lista. Recarregue a página.' : 'Não foi possível confirmar a operação. Atualize a página para conferir.', true);
   } finally { controls.forEach((item) => { item.disabled = false; }); }
 });
+
+// Selection actions are progressive: native text selection and the existing forms remain available.
+const selectionBar = document.createElement('div');
+selectionBar.className = 'selection-actions';
+selectionBar.setAttribute('role', 'toolbar');
+selectionBar.setAttribute('aria-label', 'Ações para o texto selecionado');
+selectionBar.hidden = true;
+selectionBar.innerHTML = '<button type="button" data-selection-action="rule">Criar alerta</button><button type="button" data-selection-action="ignore">Ignorar ofertas</button><span class="selection-help" role="status" hidden></span>';
+document.body.append(selectionBar);
+let selectedText = '';
+let selectionTimer;
+let selectingAction = false;
+let selectionBusy = false;
+function selectionToast(message, error = false) {
+  const status = document.querySelector('#action-status');
+  if (offerModal.open) offerModal.append(status);
+  toast(message, error);
+}
+function updateSelectionActions() {
+  if (selectingAction || selectionBar.contains(document.activeElement)) return;
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) { selectionBar.hidden = true; return; }
+  const range = selection.getRangeAt(0);
+  const element = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+  const dialog = element?.closest('dialog');
+  const allowed = element && (element.closest('main') || dialog?.matches('.offer-modal'));
+  if (!allowed || (dialog && !dialog.matches('.offer-modal')) || element.closest('input, textarea, select, button, [contenteditable]') || element.isContentEditable ||
+      [...document.querySelectorAll('.spoiler:not(.revealed)')].some((spoiler) => range.intersectsNode(spoiler))) {
+    selectionBar.hidden = true;
+    return;
+  }
+  selectedText = selection.toString().replace(/\s+/g, ' ').trim();
+  if (!selectedText) { selectionBar.hidden = true; return; }
+  (dialog || document.body).append(selectionBar);
+  const rule = selectionBar.querySelector('[data-selection-action="rule"]');
+  const ignored = selectionBar.querySelector('[data-selection-action="ignore"]');
+  const help = selectionBar.querySelector('.selection-help');
+  rule.disabled = selectedText.length > 100 || selectedText.includes(',');
+  ignored.disabled = selectedText.length > 100;
+  help.textContent = selectedText.length > 100 ? 'Selecione até 100 caracteres.' :
+    (selectedText.includes(',') ? 'Para criar alerta, selecione um trecho sem vírgula.' : '');
+  help.hidden = !help.textContent;
+  selectionBar.hidden = false;
+  const visible = [...range.getClientRects()].filter((rect) => rect.width && rect.height && rect.bottom > 0 && rect.top < innerHeight);
+  const rect = visible[visible.length - 1] || range.getBoundingClientRect();
+  const box = selectionBar.getBoundingClientRect();
+  const left = Math.max(8, Math.min(innerWidth - box.width - 8, (rect.left + rect.right - box.width) / 2));
+  const below = rect.bottom + 10;
+  const top = below + box.height <= innerHeight - 8 ? below : Math.max(8, rect.top - box.height - 10);
+  selectionBar.style.left = `${left}px`;
+  selectionBar.style.top = `${top}px`;
+}
+document.addEventListener('selectionchange', () => {
+  if (!selectingAction && !selectionBar.contains(document.activeElement)) {
+    selectedText = '';
+    selectionBar.hidden = true;
+  }
+  clearTimeout(selectionTimer);
+  selectionTimer = setTimeout(updateSelectionActions, 150);
+});
+document.addEventListener('pointerdown', (event) => {
+  if (selectionBar.contains(event.target)) {
+    selectingAction = true;
+    event.preventDefault();
+  } else {
+    selectingAction = false;
+    selectionBar.hidden = true;
+  }
+}, true);
+document.addEventListener('pointercancel', () => { selectingAction = false; });
+selectionBar.addEventListener('focusout', () => setTimeout(() => {
+  if (!selectionBar.contains(document.activeElement) && window.getSelection()?.isCollapsed) selectionBar.hidden = true;
+}, 0));
+selectionBar.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-selection-action]');
+  if (!button || selectionBusy) return;
+  const text = selectedText;
+  const action = button.dataset.selectionAction;
+  const csrf = document.querySelector('form[action="/logout"] input[name="csrf"]')?.value;
+  if (!csrf || !text || text.length > 100 || (action === 'rule' && text.includes(','))) return;
+  selectionBusy = true;
+  selectionBar.querySelectorAll('button').forEach((item) => { item.disabled = true; });
+  const data = new FormData();
+  data.set('csrf', csrf);
+  if (action === 'rule') { data.set('name', text); data.set('keywords', text); }
+  else data.set('word', text);
+  let saved = false;
+  try {
+    const response = await fetch(action === 'rule' ? '/rules' : '/ignored', {
+      method: 'POST', body: data, headers: {Accept: 'application/json'}, credentials: 'same-origin',
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) { selectionToast(result.message || (typeof result.detail === 'string' ? result.detail : 'Não foi possível salvar.'), true); return; }
+    saved = true;
+    selectionBar.hidden = true;
+    window.getSelection()?.removeAllRanges();
+    selectionToast(result.message);
+    if (action === 'ignore') {
+      await updateIgnoredList();
+      await refreshTerms();
+      document.querySelector('#refresh-feed')?.click();
+    } else if (document.querySelector('#rules-list')) {
+      const response = await fetch('/', {credentials: 'same-origin'});
+      if (!response.ok || response.redirected) throw new Error();
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      document.querySelector('#rules-list').innerHTML = page.querySelector('#rules-list').innerHTML;
+    }
+  } catch {
+    selectionToast(saved ? 'Alteração salva, mas não foi possível atualizar a tela. Recarregue para conferir.' :
+      'Não foi possível confirmar a operação. Atualize a página para conferir.', true);
+  } finally {
+    selectionBusy = false;
+    selectingAction = false;
+    if (!selectionBar.hidden) updateSelectionActions();
+  }
+});
+window.addEventListener('scroll', () => { if (!selectionBar.hidden && !selectingAction) updateSelectionActions(); }, true);
+window.addEventListener('resize', () => { if (!selectionBar.hidden) updateSelectionActions(); });
