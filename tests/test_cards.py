@@ -60,8 +60,10 @@ class OfferCardTests(unittest.TestCase):
         self.assertNotIn('Terceira linha', summary)
         self.assertIn('Terceira linha', response.text)
         self.assertIn('2 mensagens', summary)
-        self.assertNotIn('álbum', response.text.lower())
+        self.assertIn('data-confirm="Excluir definitivamente esta oferta', response.text)
         self.assertIn('Abrir no Telegram', response.text)
+        self.assertIn('offer-card-actions', response.text)
+        self.assertIn('Excluir', response.text)
 
     def test_spoiler_photo_is_not_requested_in_cover_and_text_is_masked(self):
         body = 'Oferta secreta'

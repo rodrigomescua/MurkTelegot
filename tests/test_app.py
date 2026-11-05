@@ -204,20 +204,30 @@ class WebTests(unittest.TestCase):
         main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
         main.store.ingest(-100123, 1, 'Notebook parte alertada', '2026-11-04T12:00:00+00:00', None,
                           source_json=json.dumps({'grouped_id': 123}))
-        main.store.ingest(-100123, 2, 'Outra parte', '2026-11-04T12:00:01+00:00', None,
+        main.store.ingest(-100123, 2, 'Notebook outra parte', '2026-11-04T12:00:01+00:00', None,
                           source_json=json.dumps({'grouped_id': 123}))
         main.store.ingest(-100123, 3, 'Sem alerta', '2026-11-04T12:00:02+00:00', None)
+        self.assertEqual(len(main.store.rows('SELECT * FROM hits')), 2)
         card = self.client.get('/alerts', cookies=self.auth)
-        self.assertIn('data-confirm="Excluir definitivamente esta oferta', card.text)
-        self.assertIn('action="/offers/1/delete"', self.client.get('/', cookies=self.auth).text)
+        self.assertIn('data-mark-seen', card.text)
+        self.assertNotIn('data-confirm="Excluir definitivamente esta oferta', card.text)
+        self.client.post('/offers/1/seen', cookies=self.auth,
+            data={'csrf': main.csrf_token, 'alerts': 'true'})
+        home = self.client.get('/', cookies=self.auth)
+        self.assertIn('action="/offers/1/delete"', home.text)
+        self.assertNotIn('id="telegram-panel"', home.text)
+        telegram_page = self.client.get('/telegram', cookies=self.auth)
+        self.assertIn('id="telegram-panel"', telegram_page.text)
+        self.assertIn('action="/offers/3/delete"', home.text)
+        self.assertEqual(self.client.post('/offers/3/delete', cookies=self.auth,
+            data={'csrf': main.csrf_token, 'alerts': 'false'}, follow_redirects=False).headers['location'], '/?notice=Oferta+removida.&q=')
         self.assertEqual(self.client.post('/offers/1/delete', data={'csrf': main.csrf_token},
                                           follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.post('/offers/1/delete', cookies=self.auth,
             data={'csrf': main.csrf_token, 'q': 'Notebook'}, follow_redirects=False).status_code, 303)
-        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [])
         self.assertEqual(main.store.rows('SELECT * FROM hits'), [])
-        self.assertEqual(self.post('/offers/3/delete').status_code, 404)
-        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+        self.assertEqual(self.post('/offers/1/delete').status_code, 404)
 
     def test_signed_offer_image_requires_valid_unexpired_signature(self):
         from pathlib import Path
@@ -307,7 +317,7 @@ class WebTests(unittest.TestCase):
         telegram.client.is_user_authorized.return_value = False
         telegram.client.send_code_request.return_value = SimpleNamespace(phone_code_hash='private-hash')
         with patch.object(main, 'telegram', telegram):
-            initial = self.client.get('/', cookies=self.auth)
+            initial = self.client.get('/telegram', cookies=self.auth)
             self.assertNotIn('name="code"', initial.text)
             response = self.client.post('/telegram/code', cookies=self.auth,
                 headers={'Accept': 'application/json'},
@@ -317,7 +327,7 @@ class WebTests(unittest.TestCase):
             self.assertIn('value="+5511999999999"', html)
             self.assertIn('name="code"', html)
             self.assertNotIn('private-hash', response.text)
-            self.assertIn('value="+5511999999999"', self.client.get('/', cookies=self.auth).text)
+            self.assertIn('value="+5511999999999"', self.client.get('/telegram', cookies=self.auth).text)
             telegram.client.sign_in.side_effect = errors.PhoneCodeInvalidError(None)
             error = self.client.post('/telegram/login', cookies=self.auth,
                 headers={'Accept': 'application/json'},

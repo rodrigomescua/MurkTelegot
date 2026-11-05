@@ -2,10 +2,7 @@
 {% block content %}
 <div class="heading"><div><p class="eyebrow">RADAR PESSOAL</p><h1>{{ 'Seus alertas.' if alerts else 'Ofertas que importam.' }}</h1><p>{{ 'Acompanhe suas ofertas por estado de leitura.' if alerts else 'Todos os seus grupos em um lugar. Alertas pelas palavras que você procura.' }}</p></div><div class="counter" id="alert-counter"><strong>{{ unread }}</strong><span>alertas não lidos</span></div></div>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
-{% if connection_error %}<p class="notice" role="alert">{{ connection_error }}</p>{% endif %}
-<div class="layout {{ 'alerts-layout' if alerts else '' }}">{% if not alerts %}<aside>
-{% include 'telegram.html' %}
-</aside>{% endif %}<div><nav id="feed-nav"><a href="{{ '/alerts' if alerts else '/' }}?q={{ q|urlencode }}" id="refresh-feed">Atualizar lista</a></nav>
+<div class="layout {{ 'alerts-layout' if alerts else '' }}"><div><nav id="feed-nav"><a href="{{ '/alerts' if alerts else '/' }}?q={{ q|urlencode }}" id="refresh-feed">Atualizar lista</a></nav>
 <form class="search" method="get" action="{{ '/alerts' if alerts else '/' }}"><label class="sr-only" for="q">Buscar ofertas</label><input id="q" name="q" value="{{ q }}" placeholder="Buscar nas mensagens…" maxlength="200"><button>Buscar</button>{% if q %}<a href="{{ '/alerts' if alerts else '/' }}">Limpar busca</a>{% endif %}</form><p id="new-offers" class="notice" role="status" hidden></p><div id="feed" data-marker="{{ marker }}" data-q="{{ q }}" data-alerts="{{ 'true' if alerts else 'false' }}"><p class="muted">{{ offers|length }} ofertas exibidas · Até 100 mensagens recentes{{ ' por seção' if alerts else '' }}.</p>
 {% if alerts %}
 <section class="alert-section" aria-labelledby="unread-title"><h2 id="unread-title">Não lidos · {{ unread_offers|length }}</h2>{% if unread_offers %}<div class="offer-grid">{% for offer in unread_offers %}{% include 'offer_card.html' %}{% endfor %}</div>{% else %}<p class="muted">Nenhum alerta não lido{% if q %} para esta busca{% endif %}.</p>{% endif %}</section>
@@ -14,7 +11,7 @@
 {% if offers %}<div class="offer-grid">{% for offer in offers %}{% include 'offer_card.html' %}{% endfor %}</div>
 {% else %}<section class="empty"><div class="empty-icon" aria-hidden="true"><img src="/brand/logo-icon.svg" alt="" width="72" height="72"></div>
 {% if q %}<h2>Nenhuma oferta encontrada.</h2><p>Tente outra palavra ou limpe a busca para ver mais mensagens.</p><a class="button" href="/">Limpar busca</a>
-{% elif not authorized %}<div id="connect-guidance"><h2>Seu radar está pronto.</h2><p>Conecte sua conta, selecione os grupos e crie uma regra. As novas mensagens aparecerão aqui.</p><a class="button" href="#telegram-panel">Conectar Telegram</a></div>
+{% elif not authorized %}<div id="connect-guidance"><h2>Seu radar está pronto.</h2><p>Conecte sua conta, selecione os grupos e crie uma regra. As novas mensagens aparecerão aqui.</p><a class="button" href="/telegram">Conectar Telegram</a></div>
 {% elif not chats %}<h2>Escolha os grupos para começar.</h2><p>Sua conta está conectada. Selecione os grupos e canais que deseja acompanhar.</p><a class="button" href="/groups">Selecionar grupos</a>
 {% else %}<h2>Nenhuma oferta para exibir.</h2><p>Novas mensagens aparecerão aqui. Ofertas com palavras ignoradas ficam fora desta lista, mas podem gerar alertas.</p><a href="/ignored">Revisar palavras ignoradas</a>{% endif %}</section>{% endif %}
 {% endif %}</div></div></div>

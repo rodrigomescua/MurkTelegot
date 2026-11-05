@@ -10,7 +10,7 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
@@ -173,6 +173,17 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
     })
 
 
+@app.get('/telegram', dependencies=[Depends(authenticate)])
+async def telegram_page(request: Request, notice: str = ''):
+    return templates.TemplateResponse(request, 'telegram_page.html', {
+        'csrf': csrf_token, 'authorized': await telegram.authorized(),
+        'configured': bool(telegram.client), 'connection_error': telegram.error,
+        'phone': telegram.phone or '', 'code_pending': bool(telegram.code_hash),
+        'needs_password': telegram.needs_password,
+        'chats': store.rows('SELECT * FROM chats ORDER BY title'), 'notice': notice,
+    })
+
+
 @app.get('/offers/new', dependencies=[Depends(authenticate)])
 async def new_offers(after: int = 0, q: str = '', alerts: bool = False):
     if after < 0 or len(q) > 200:
@@ -190,7 +201,7 @@ async def telegram_action(request: Request, action: str, phone: str = Form('', m
                           code: str = Form('', max_length=20), password: str = Form('', max_length=256)):
     async def reply(message, ok=False):
         if 'application/json' not in request.headers.get('accept', ''):
-            return redirect(message)
+            return RedirectResponse('/telegram?' + urlencode({'notice': message}), status_code=303)
         payload = {'ok': ok, 'message': message}
         if ok:
             payload['connected'] = await telegram.authorized()
@@ -447,10 +458,10 @@ async def seen(request: Request, offer_id: int, q: str = Form('', max_length=200
 
 
 @app.post('/offers/{offer_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
-async def delete_offer(offer_id: int, q: str = Form('', max_length=200)):
+async def delete_offer(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
     if not store.delete_offer(offer_id):
         raise HTTPException(404, 'Alerta não encontrado.')
-    return redirect('Oferta removida.', q=q, alerts=True)
+    return redirect('Oferta removida.', q=q, alerts=alerts)
 
 
 @app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])

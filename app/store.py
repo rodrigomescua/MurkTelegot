@@ -325,7 +325,7 @@ class Store:
         with self.connect() as db:
             ids = [row[0] for row in db.execute('''SELECT id FROM offers WHERE id=? OR (chat_id,grouped_id) IN
                 (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''', (offer_id, offer_id))]
-            if not ids or not db.execute('SELECT 1 FROM hits WHERE offer_id IN (' + ','.join('?' for _ in ids) + ') LIMIT 1', ids).fetchone():
+            if not ids:
                 return False
             db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in ids])
             db.execute('''DELETE FROM offers WHERE id=? OR (chat_id,grouped_id) IN
