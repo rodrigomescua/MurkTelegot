@@ -341,7 +341,8 @@ if (feed) {
   let marker = Number(feed.dataset.marker);
   let busy = false;
   let generation = 0;
-  const status = document.querySelector('#new-offers');
+  const status = document.querySelector('#new-offers-status');
+  const updateButton = document.querySelector('#new-offers');
   const refresh = document.querySelector('#refresh-feed');
   const query = new URLSearchParams({q: feed.dataset.q, alerts: feed.dataset.alerts});
   async function poll() {
@@ -352,11 +353,15 @@ if (feed) {
       const {count} = await response.json();
       if (current !== generation) return;
       status.hidden = !count;
-      status.textContent = count ? `${count} ${count === 1 ? 'nova oferta' : 'novas ofertas'} disponível${count === 1 ? '' : 'is'}. Use Atualizar lista para exibir.` : '';
+      updateButton.disabled = false;
+      status.classList.remove('error');
+      updateButton.textContent = count ? `${count} ${count === 1 ? 'nova oferta disponível' : 'novas ofertas disponíveis'}. Clique aqui para atualizar.` : '';
     } catch {
       if (current !== generation) return;
       status.hidden = false;
-      status.textContent = 'Não foi possível verificar novas ofertas. A próxima tentativa será automática.';
+      updateButton.disabled = true;
+      status.classList.add('error');
+      updateButton.textContent = 'Não foi possível verificar novas ofertas. A próxima tentativa será automática.';
     }
   }
   function applyPage(doc) {
@@ -388,6 +393,7 @@ if (feed) {
     } catch { toast('Não foi possível atualizar a lista. Tente novamente.', true); }
     finally { busy = false; }
   });
+  updateButton.addEventListener('click', () => refresh.click());
   feed.addEventListener('submit', async (event) => {
     const form = event.target;
     if (!form.matches('[data-mark-seen]')) return;

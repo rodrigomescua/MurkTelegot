@@ -79,3 +79,9 @@ Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_se
 ## Retenção e gerenciamento de regras — 2026-11-05
 
 90 testes passaram com SQLite temporário. Testes cobrem prazos com `offers.date`, regras de prioridade, exclusão manual, backfill e Gotify retroativos por álbum, imagens com URL assinada, expiração, assinatura inválida e spoilers. `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile` e `git diff --check` passaram. Chromium móvel executou `tests/browser_selection.py` com dados temporários e aprovou seleção/criação de alerta, spoilers e campos sensíveis. Não houve conexão Telegram, Gotify real ou Docker.
+
+## Home e cards — 2026-11-05
+
+A Home foi aberta no Chromium com uma cópia temporária de `.data/offers_backup.db`; o arquivo original não foi alterado. A captura inicial reproduziu a quebra: grid de coluna única com cards de 340 px em viewport de 1365 px, sobrando espaço à direita. Após corrigir o layout, a Home exibiu quatro colunas (cards de 307,75 px) em 1365 px e uma coluna (350 px) em 390 px, sem overflow horizontal. O botão de novas ofertas foi conferido no estado normal e de erro; clique acionou o refresh existente, e o erro apareceu anunciado com o botão desabilitado. O texto não se sobrepôs aos atalhos flutuantes. Clicar na capa ou no texto abriu o modal; CTA textual foi removido. Nenhum erro JavaScript no Chromium. Os testes exibiram placeholders de mídia porque o cache de mídia não foi incluído na cópia; não houve conexão real ao Telegram.
+
+91 testes `unittest` passaram. `bash -n run-dev.sh`, `node --check app/static/app.js`, `py_compile` e `git diff --check` passaram.

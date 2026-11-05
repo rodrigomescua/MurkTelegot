@@ -137,6 +137,18 @@ class WebTests(unittest.TestCase):
         self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
         self.assertEqual(self.client.post('/rules', cookies=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
 
+    def test_feed_layout_and_new_offers_button_structure(self):
+        home = self.client.get('/', cookies=self.auth).text
+        alerts = self.client.get('/alerts', cookies=self.auth).text
+        css = self.client.get('/static/style.css').text
+        self.assertIn('<div class="layout"><div>', home)
+        self.assertIn('<div class="layout"><div>', alerts)
+        self.assertIn('<div id="new-offers-status" class="new-offers-status" role="status" aria-live="polite" hidden><button type="button" id="new-offers"></button></div>', home)
+        self.assertIn('.layout{display:grid;grid-template-columns:minmax(0,1fr);', css)
+        self.assertNotIn('grid-template-columns:340px', css)
+        self.assertIn('.new-offers-status.error #new-offers', css)
+        self.assertIn('@media(max-width:600px){#new-offers{padding-right:80px}}', css)
+
     def test_panel_login_session_logout_and_csrf(self):
         page = self.client.get('/', follow_redirects=False)
         self.assertEqual(page.headers['location'], '/login')

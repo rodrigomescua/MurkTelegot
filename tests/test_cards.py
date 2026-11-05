@@ -83,4 +83,7 @@ class OfferCardTests(unittest.TestCase):
         response = self.client.get('/', cookies=self.auth)
         self.assertIn('Sem imagem', response.text)
         self.assertIn('<details class="offer-detail">', response.text)
-        self.assertIn('Ver oferta completa', response.text)
+        summary = re.search(r'<summary class="offer-summary">(.*?)</summary>', response.text, re.S).group(1)
+        self.assertIn('class="offer-cover"', summary)
+        self.assertIn('class="offer-overview"', summary)
+        self.assertNotIn('Ver oferta completa', response.text)
