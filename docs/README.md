@@ -13,6 +13,7 @@ Organização adaptada do RazorMiniflux: contrato operacional na raiz, decisões
 | [Primeira entrega](plans/primeira-entrega.md) | Escopo, critérios de aceite e estado da entrega |
 | [Operação](operacao.md) | Publicação, dados, atualização e recuperação |
 | [Verificação](verificacao.md) | Como repetir testes e limites das evidências |
+| [Desempenho](performance/README.md) | Medição reproduzível da consulta de ofertas |
 | [Identidade visual](../assets/README.md) | Logo, ícone, PNGs transparentes e pacote de download |
 
-Crie novos ADRs quando mudar uma decisão de arquitetura. Planos não substituem contratos vigentes. Relatórios de desempenho devem incluir método, ambiente e limites; ainda não há medições para justificar uma pasta `performance/`.
+Crie novos ADRs quando mudar uma decisão de arquitetura. Planos não substituem contratos vigentes. Relatórios de desempenho devem incluir método, ambiente e limites.

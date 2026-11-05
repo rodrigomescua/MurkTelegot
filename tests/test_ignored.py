@@ -106,6 +106,18 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.new_offers(marker, alerts=True), 2)
         self.assertEqual(self.store.new_offers(marker, 'Notebook', True), 2)
 
+    def test_recent_index_is_added_to_existing_database_and_used_for_feed(self):
+        self.add_offer(1, 'Oferta antiga')
+        self.store.execute('DROP INDEX offers_recent')
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.rows('SELECT message_id, body FROM offers'),
+                         [{'message_id': 1, 'body': 'Oferta antiga'}])
+        where, args = reopened.feed_filter()
+        plan = reopened.rows('EXPLAIN QUERY PLAN SELECT o.id FROM offers o ' + where +
+                             ' ORDER BY date DESC,id DESC LIMIT 100', args)
+        self.assertTrue(any('offers_recent' in row['detail'] for row in plan))
+        self.assertEqual(reopened.feed()[0]['message_id'], 1)
+
     def test_persistence_and_additive_migration_preserve_existing_data(self):
         self.add_offer(1, 'Notebook PS5')
         self.store.execute('DROP TABLE ignored_keywords')

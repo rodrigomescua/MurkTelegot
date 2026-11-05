@@ -67,3 +67,7 @@ Testes com dados temporários verificam metadados Markdown no protocolo Gotify, 
 ## Diagnóstico Gotify
 
 Testes simulam respostas HTTP, falhas de DNS, timeout, conexão recusada e TLS, verificam detalhes na tela e no log e ausência de token e texto privado. Chromium com servidor local simulado verificou erro HTTP persistente e sigilo. A falha relatada em produção não foi reproduzida nem identificada neste ambiente.
+
+## Índice da tela principal
+
+Teste com banco temporário verifica criação aditiva do índice em banco existente, preservação de dados e uso pelo SQLite. Os testes existentes verificam busca, ignorados antes do limite e agrupamento. Uma [medição com dados sintéticos](performance/README.md) compara a consulta com e sem o índice; não houve medição em produção.

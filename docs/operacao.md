@@ -38,3 +38,7 @@ Em mensagens coletadas antes desta versão, use **Recuperar original** para busc
 A configuração do Gotify é feita no painel e fica no banco do volume, incluindo o token em texto legível para o processo; proteja o diretório e os backups. A URL precisa ser acessível a partir do processo/container. A tabela de configurações é aditiva; versões anteriores ignoram seus registros. Envios usam uma tentativa por novo alerta e um timeout de cinco segundos; falhas são registradas sem o token e não removem alertas nem são reenviadas automaticamente. O teste em Configurações mostra um diagnóstico persistente (código HTTP ou categoria de rede/TLS); o log também informa a categoria, sem incluir URL, token, corpo da resposta ou conteúdo da oferta.
 
 Ao usar Gotify atrás do Cloudflare, o envio se identifica como `Mozilla/5.0 (compatible; MurkTelegot/1.0)` para evitar bloqueios ao identificador padrão do Python. Regras específicas do proxy ainda podem impedir o acesso; nesse caso, confira os eventos de segurança do Cloudflare.
+
+## Desempenho da listagem
+
+O banco cria automaticamente um índice de ordenação de ofertas na primeira inicialização após a atualização. Em bancos grandes, essa criação inicial pode demorar; nenhuma oferta é removida. Há uma [medição reproduzível](performance/README.md) com dados sintéticos.

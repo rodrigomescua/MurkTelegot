@@ -79,6 +79,7 @@ class Store:
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
+            db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
 
     @contextmanager
     def connect(self):
