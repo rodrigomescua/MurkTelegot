@@ -461,7 +461,7 @@ async function submitQuick(form, button) {
         document.querySelector('#refresh-feed')?.click();
       }
       if (form.action.endsWith('/rules') && document.querySelector('#rules-list')) {
-        const page = await fetch('/', {credentials: 'same-origin'});
+        const page = await fetch('/rules-page', {credentials: 'same-origin'});
         if (!page.ok || page.redirected) throw new Error();
         const doc = new DOMParser().parseFromString(await page.text(), 'text/html');
         document.querySelector('#rules-list').innerHTML = doc.querySelector('#rules-list').innerHTML;
@@ -587,6 +587,7 @@ function updateSelectionActions() {
   const rule = selectionBar.querySelector('[data-selection-action="rule"]');
   const ignored = selectionBar.querySelector('[data-selection-action="ignore"]');
   const help = selectionBar.querySelector('.selection-help');
+  rule.hidden = location.pathname !== '/rules-page';
   rule.disabled = selectedText.length > 100 || selectedText.includes(',');
   ignored.disabled = selectedText.length > 100;
   help.textContent = selectedText.length > 100 ? 'Selecione até 100 caracteres.' :
@@ -653,7 +654,7 @@ selectionBar.addEventListener('click', async (event) => {
       await refreshTermOffers();
       document.querySelector('#refresh-feed')?.click();
     } else if (document.querySelector('#rules-list')) {
-      const response = await fetch('/', {credentials: 'same-origin'});
+      const response = await fetch('/rules-page', {credentials: 'same-origin'});
       if (!response.ok || response.redirected) throw new Error();
       const page = new DOMParser().parseFromString(await response.text(), 'text/html');
       document.querySelector('#rules-list').innerHTML = page.querySelector('#rules-list').innerHTML;

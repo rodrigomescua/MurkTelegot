@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Regras de alerta</h1>
+<p>Uma correspondência em qualquer parte da oferta ou álbum gera alerta.</p>
+{% if notice %}<p class="toast" role="status">{{ notice }}</p>{% endif %}
+<section id="rules"><h2>Criar regra</h2><form method="post" action="/rules"><input type="hidden" name="csrf" value="{{ csrf }}"><label for="name">Nome da regra</label><input id="name" name="name" required maxlength="100"><label for="keywords">Palavras ou expressões</label><input id="keywords" name="keywords" required maxlength="1000"><button>Criar alerta</button></form></section>
+<section id="rules-list"><h2>Regras cadastradas</h2>{% for rule in rules %}<div class="rule"><strong>{{ rule.name }}</strong><p>{{ rule.keywords }}</p><form method="post" action="/rules/{{ rule.id }}/delete" data-confirm="Remover esta regra? As ofertas salvas serão preservadas."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remover regra</button></form></div>{% else %}<p class="muted">Nenhuma regra cadastrada.</p>{% endfor %}</section>
+{% endblock %}

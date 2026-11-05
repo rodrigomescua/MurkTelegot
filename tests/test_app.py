@@ -37,6 +37,26 @@ class StoreTests(unittest.TestCase):
         self.ingest(body='')
         self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
 
+    def test_expiry_uses_offer_date_and_preserves_alert_albums(self):
+        from datetime import datetime, timezone, timedelta
+        self.store.add_ignored('blocked')
+        now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
+        add = lambda message_id, body, age, group=None: self.store.ingest(
+            -100123, message_id, body, (now - age).isoformat(), None,
+            source_json=f'{{"grouped_id": {group}}}' if group is not None else None)
+        add(10, 'blocked vencida', timedelta(hours=4, seconds=1))
+        add(11, 'blocked recente', timedelta(hours=3, minutes=59))
+        add(12, 'Oferta antiga', timedelta(hours=24, seconds=1))
+        add(13, 'Oferta recente', timedelta(hours=23, minutes=59))
+        add(14, 'Café com alerta', timedelta(hours=25))
+        add(15, 'blocked álbum expirado', timedelta(hours=5), 44)
+        add(16, 'Outra parte', timedelta(hours=5), 44)
+        add(17, 'blocked álbum alertado', timedelta(hours=25), 45)
+        add(18, 'Café', timedelta(hours=25), 45)
+        self.store.expire_offers(now)
+        self.assertEqual({r['message_id'] for r in self.store.rows('SELECT message_id FROM offers')},
+                         {11, 13, 14, 17, 18})
+
     def test_duplicate_edit_and_matching_are_atomic(self):
         self.ingest()
         self.ingest()
@@ -46,6 +66,25 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
         reopened = Store(self.store.path)
         self.assertEqual(reopened.rows('SELECT body FROM offers')[0]['body'], 'Outro produto')
+
+    def test_add_rule_backfills_ignored_offers_and_album_parts(self):
+        self.store.add_ignored('blocked')
+        self.store.ingest(-100123, 10, 'Notebook oferta', '2026-11-04T12:00:00+00:00', None)
+        self.store.ingest(-100123, 11, 'blocked Notebook', '2026-11-04T12:00:01+00:00', None)
+        self.store.ingest(-100123, 12, 'Notebook capa', '2026-11-04T12:00:02+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        self.store.ingest(-100123, 13, 'Outra parte', '2026-11-04T12:00:03+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        self.store.ingest(-100123, 14, 'Sem correspondência', '2026-11-04T12:00:04+00:00', None)
+        self.store.execute('UPDATE offers SET seen=1 WHERE message_id IN (10,11)')
+        count = self.store.add_rule('Notebook', 'notebook')
+        self.assertEqual(count, 3)
+        self.assertEqual({row['offer_id'] for row in self.store.rows(
+            'SELECT h.offer_id FROM hits h JOIN rules r ON r.id=h.rule_id WHERE r.name=?', ('Notebook',))},
+            {row['id'] for row in self.store.rows('SELECT id FROM offers WHERE message_id IN (10,11,12)')})
+        self.assertEqual(self.store.rows('SELECT seen FROM offers WHERE message_id IN (10,11)'),
+                         [{'seen': 0}, {'seen': 0}])
+        self.assertEqual(len(self.store.feed(alerts=True)), 3)
 
 
 class WebTests(unittest.TestCase):
@@ -105,7 +144,47 @@ class WebTests(unittest.TestCase):
         self.assertEqual(invalid.status_code, 400)
         valid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'name': 'Café', 'keywords': 'café'})
         self.assertTrue(valid.json()['ok'])
+        self.assertEqual(valid.json()['matched'], 0)
         self.assertEqual(main.store.rows('SELECT name FROM rules'), [{'name': 'Café'}])
+
+    def test_rule_creation_reports_existing_alerts(self):
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        main.store.ingest(-100123, 1, 'Notebook', '2026-11-04T12:00:00+00:00', None)
+        response = self.client.post('/rules', cookies=self.auth, headers={'Accept': 'application/json'},
+            data={'csrf': main.csrf_token, 'name': 'Notebook', 'keywords': 'notebook'})
+        self.assertEqual(response.json()['matched'], 1)
+        self.assertIn('Notebook', self.client.get('/alerts', cookies=self.auth).text)
+        self.assertEqual(main.store.unread(), 1)
+
+    def test_rule_management_has_own_page(self):
+        home = self.client.get('/', cookies=self.auth)
+        self.assertNotIn('id="rules-list"', home.text)
+        self.assertNotIn('id="quick-rule"', home.text)
+        page = self.client.get('/rules-page', cookies=self.auth)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('id="rules-list"', page.text)
+        self.assertEqual(self.client.get('/rules-page', follow_redirects=False).status_code, 303)
+
+    def test_alert_offer_deletion_is_confirmed_authenticated_and_album_wide(self):
+        import json
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        main.store.ingest(-100123, 1, 'Notebook parte alertada', '2026-11-04T12:00:00+00:00', None,
+                          source_json=json.dumps({'grouped_id': 123}))
+        main.store.ingest(-100123, 2, 'Outra parte', '2026-11-04T12:00:01+00:00', None,
+                          source_json=json.dumps({'grouped_id': 123}))
+        main.store.ingest(-100123, 3, 'Sem alerta', '2026-11-04T12:00:02+00:00', None)
+        card = self.client.get('/alerts', cookies=self.auth)
+        self.assertIn('data-confirm="Excluir definitivamente esta oferta', card.text)
+        self.assertIn('action="/offers/1/delete"', self.client.get('/', cookies=self.auth).text)
+        self.assertEqual(self.client.post('/offers/1/delete', data={'csrf': main.csrf_token},
+                                          follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post('/offers/1/delete', cookies=self.auth,
+            data={'csrf': main.csrf_token, 'q': 'Notebook'}, follow_redirects=False).status_code, 303)
+        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+        self.assertEqual(main.store.rows('SELECT * FROM hits'), [])
+        self.assertEqual(self.post('/offers/3/delete').status_code, 404)
+        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
 
     def test_brand_assets_are_accessible_and_used_by_dashboard(self):
         response = self.client.get('/', cookies=self.auth)

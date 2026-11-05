@@ -12,7 +12,7 @@ Em repositório/pacote privado, autentique o servidor no GHCR com permissão de 
 
 Em desenvolvimento, os dados ficam em `.data/`; no container, em `/data`, montado pelo volume `murktelegot_data`. Guarde o diretório completo, incluindo banco de ofertas, sessão Telegram e eventuais arquivos auxiliares do SQLite. Pare o app antes de copiar o diretório para obter um backup consistente. Proteja também o backup, pois ele contém acesso à conta e mensagens privadas.
 
-Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alterações de grupos interrompem somente a coleta futura; as ofertas já salvas permanecem. Palavras ignoradas ficam no banco e só ocultam ofertas da listagem principal; não excluem ofertas ou alertas. As tabelas do filtro e das sugestões ocultas são criadas de forma aditiva; versões anteriores ignoram a tabela de sugestões, sem apagá-la nem alterar os dados existentes.
+Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alterações de grupos interrompem somente a coleta futura. Palavras ignoradas ocultam ofertas da listagem principal; ofertas sem alerta são apagadas 4 horas após a data Telegram em `offers.date`. Ofertas sem alerta e sem palavra ignorada são apagadas 24 horas após essa data. Ofertas com alerta, incluindo todas as partes do álbum, permanecem até exclusão manual. A página `/rules-page` gerencia regras de alerta. A limpeza roda ao iniciar e a cada cinco minutos, sem migração de esquema; ofertas antigas podem ser removidas no primeiro início após atualização. Faça backup antes de atualizar.
 
 ## Atualização e rollback
 
@@ -21,7 +21,7 @@ Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alteraç
 3. Confira `/health`, autenticação no painel, conexão Telegram e grupos selecionados. `/health` não atesta conectividade Telegram.
 4. Se precisar voltar, pare o app, restaure o backup e a tag anteriores e só então reinicie. A migração de mensagens cria um snapshot SQLite em `offers.db.before-rich-messages.db` antes de adicionar colunas; restaure o backup completo anterior junto com a imagem antiga. Dados recebidos após o backup não estarão nele: preserve também uma cópia do volume atual antes de voltar.
 
-Preserve o volume: `docker compose down -v` remove os dados. A base ainda não possui limpeza automática; acompanhe espaço disponível. Uma sessão comprometida pode ser revogada em Telegram → Configurações → Dispositivos.
+Preserve o volume: `docker compose down -v` remove os dados. A limpeza automática remove ofertas expiradas; cache de mídia não é limpo automaticamente. Uma sessão comprometida pode ser revogada em Telegram → Configurações → Dispositivos.
 
 ## Aviso conhecido do Telethon
 

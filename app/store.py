@@ -4,6 +4,7 @@ import re
 from contextlib import contextmanager
 import sqlite3
 import unicodedata
+from datetime import datetime, timezone, timedelta
 from collections import Counter
 from pathlib import Path
 
@@ -23,6 +24,10 @@ def ignored_matches(text, word):
     return bool(word and re.search(r'(?<![^\W_])' + re.escape(normalize(word)) + r'(?![^\W_])', normalize(text or '')))
 
 
+def ignored_pattern(words):
+    return re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, words)) + r')(?![^\W_])') if words else None
+
+
 def term_phrases(text):
     tokens = list(re.finditer(r'[^\W_]+', text))
     for i, first in enumerate(tokens):
@@ -34,14 +39,13 @@ def term_phrases(text):
 
 
 def offer_term_groups(rows, ignored):
-    ignored_pattern = (re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, ignored)) + r')(?![^\W_])')
-                       if ignored else None)
+    pattern = ignored_pattern(ignored)
     key = lambda row: (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else ('message', row['id'])
     grouped = {}
     for row in rows:
         grouped.setdefault(key(row), []).append(row)
     for parts in grouped.values():
-        if not ignored_pattern or not any(ignored_pattern.search(normalize(part['body'])) for part in parts):
+        if not pattern or not any(pattern.search(normalize(part['body'])) for part in parts):
             yield parts
 
 
@@ -116,6 +120,17 @@ class Store:
     def execute(self, sql, args=()):
         with self.connect() as db:
             db.execute(sql, args)
+
+    def add_rule(self, name, keywords):
+        with self.connect() as db:
+            rule_id = db.execute('INSERT INTO rules(name, keywords) VALUES(?,?)',
+                                 (name, keywords)).lastrowid
+            matched = [row['id'] for row in db.execute('SELECT id,body FROM offers')
+                       if matches(row['body'], keywords)]
+            db.executemany('INSERT INTO hits(offer_id,rule_id) VALUES(?,?)',
+                           [(offer_id, rule_id) for offer_id in matched])
+            db.executemany('UPDATE offers SET seen=0 WHERE id=?', [(offer_id,) for offer_id in matched])
+            return len(matched)
 
     def gotify_settings(self):
         settings = {row['key']: row['value'] for row in self.rows("SELECT key,value FROM settings WHERE key IN ('gotify_url','gotify_token','gotify_enabled')")}
@@ -233,11 +248,11 @@ class Store:
                     (chat_id, message_id, str(grouped) if grouped is not None else None,
                      str(grouped) if grouped is not None else None)).fetchone())
             db.execute('''INSERT INTO offers(chat_id,message_id,chat_title,body,date,url,source_json,grouped_id)
-                          VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(chat_id,message_id)
-                          DO UPDATE SET body=excluded.body,url=excluded.url,
-                          source_json=excluded.source_json,grouped_id=excluded.grouped_id''',
-                       (chat_id, message_id, chat['title'], body or '', date, url, source_json,
-                        str(grouped) if grouped is not None else None))
+                            VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(chat_id,message_id)
+                           DO UPDATE SET body=excluded.body,url=excluded.url,
+                           source_json=excluded.source_json,grouped_id=excluded.grouped_id''',
+                        (chat_id, message_id, chat['title'], body or '', date, url, source_json,
+                         str(grouped) if grouped is not None else None))
             offer_id = db.execute('SELECT id FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()['id']
             db.execute('DELETE FROM hits WHERE offer_id=?', (offer_id,))
@@ -249,6 +264,44 @@ class Store:
             if report_alert:
                 return offer_id, {'chat': chat['title'], 'body': body or '', 'url': url, 'source_json': source_json, 'rules': matched} if matched and not had_alert else None
             return offer_id
+
+    def expire_offers(self, now=None):
+        now = now or datetime.now(timezone.utc)
+        short = (now - timedelta(hours=4)).isoformat()
+        long = (now - timedelta(hours=24)).isoformat()
+        with self.connect() as db:
+            pattern = ignored_pattern([row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')])
+            db.create_function('ignored_offer', 1,
+                               lambda body: bool(pattern and pattern.search(normalize(body or ''))), deterministic=True)
+            db.execute('''WITH
+                groups AS MATERIALIZED (
+                    SELECT chat_id,coalesce(grouped_id,'message-' || id) AS group_id,
+                           max(julianday(date)) AS latest
+                    FROM offers GROUP BY chat_id,coalesce(grouped_id,'message-' || id)),
+                alerted AS MATERIALIZED (
+                    SELECT DISTINCT o.chat_id,coalesce(o.grouped_id,'message-' || o.id) AS group_id
+                    FROM offers o JOIN hits h ON h.offer_id=o.id),
+                ignored AS MATERIALIZED (
+                    SELECT DISTINCT o.chat_id,coalesce(o.grouped_id,'message-' || o.id) AS group_id
+                    FROM offers o WHERE ignored_offer(o.body))
+                DELETE FROM offers WHERE (chat_id,coalesce(grouped_id,'message-' || id)) IN (
+                    SELECT g.chat_id,g.group_id FROM groups g
+                    LEFT JOIN alerted a USING(chat_id,group_id)
+                    LEFT JOIN ignored i USING(chat_id,group_id)
+                    WHERE a.chat_id IS NULL AND g.latest < CASE
+                        WHEN i.chat_id IS NOT NULL THEN julianday(?) ELSE julianday(?) END)''',
+                (short, long))
+
+    def delete_offer(self, offer_id):
+        with self.connect() as db:
+            ids = [row[0] for row in db.execute('''SELECT id FROM offers WHERE id=? OR (chat_id,grouped_id) IN
+                (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''', (offer_id, offer_id))]
+            if not ids or not db.execute('SELECT 1 FROM hits WHERE offer_id IN (' + ','.join('?' for _ in ids) + ') LIMIT 1', ids).fetchone():
+                return False
+            db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in ids])
+            db.execute('''DELETE FROM offers WHERE id=? OR (chat_id,grouped_id) IN
+                (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''', (offer_id, offer_id))
+            return True
 
     def feed_filter(self, q='', alerts=False):
         clauses, args = [], []

@@ -53,7 +53,14 @@ async def csrf(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     await telegram.start()
+    async def expire_loop():
+        while True:
+            await asyncio.to_thread(store.expire_offers)
+            await asyncio.sleep(300)
+    expiry = asyncio.create_task(expire_loop())
     yield
+    expiry.cancel()
+    await asyncio.gather(expiry, return_exceptions=True)
     await telegram.stop()
 
 
@@ -139,7 +146,6 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         'phone': telegram.phone or '', 'code_pending': bool(telegram.code_hash),
         'needs_password': telegram.needs_password,
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
-        'rules': store.rows('SELECT * FROM rules ORDER BY id DESC'),
         'offers': offers, 'unread_offers': unread_offers, 'read_offers': read_offers, 'marker': marker,
         'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
@@ -283,13 +289,20 @@ async def save_groups(chat_ids: list[int] = Form(default=[])):
 @app.post('/rules', dependencies=[Depends(authenticate), Depends(csrf)])
 async def add_rule(request: Request, name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
     valid = bool(name.strip() and any(w.strip() for w in keywords.split(',')))
+    matched = 0
     if valid:
-        store.execute('INSERT INTO rules(name, keywords) VALUES(?,?)', (name.strip(), keywords.strip()))
-    message = ('Regra criada. Ela será aplicada às próximas mensagens e edições.' if valid
+        matched = store.add_rule(name.strip(), keywords.strip())
+    message = (f'Regra criada. Correspondências retroativas: {matched}; mensagens e edições futuras também serão verificadas.' if valid
                else 'Informe um nome e pelo menos uma palavra-chave.')
     if 'application/json' in request.headers.get('accept', ''):
-        return JSONResponse({'ok': valid, 'message': message}, status_code=200 if valid else 400)
-    return redirect(message)
+        return JSONResponse({'ok': valid, 'message': message, 'matched': matched}, status_code=200 if valid else 400)
+    return RedirectResponse('/rules-page?notice=' + message.replace(' ', '+'), status_code=303)
+
+
+@app.get('/rules-page', dependencies=[Depends(authenticate)])
+async def rules_page(request: Request, notice: str = ''):
+    return templates.TemplateResponse(request, 'rules.html', {'csrf': csrf_token, 'notice': notice,
+        'rules': store.rows('SELECT * FROM rules ORDER BY id DESC')})
 
 
 @app.post('/rules/{rule_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -297,7 +310,7 @@ async def delete_rule(rule_id: int):
     with store.connect() as db:
         db.execute('DELETE FROM hits WHERE rule_id=?', (rule_id,))
         db.execute('DELETE FROM rules WHERE id=?', (rule_id,))
-    return redirect('Regra removida.')
+    return RedirectResponse('/rules-page?notice=Regra+removida.', status_code=303)
 
 
 @app.get('/ignored', dependencies=[Depends(authenticate)])
@@ -405,6 +418,13 @@ async def seen(request: Request, offer_id: int, q: str = Form('', max_length=200
     if 'application/json' in request.headers.get('accept', ''):
         return {'ok': True, 'message': 'Alerta marcado como lido.'}
     return redirect('Alerta marcado como lido.', q=q, alerts=alerts)
+
+
+@app.post('/offers/{offer_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
+async def delete_offer(offer_id: int, q: str = Form('', max_length=200)):
+    if not store.delete_offer(offer_id):
+        raise HTTPException(404, 'Alerta não encontrado.')
+    return redirect('Oferta removida.', q=q, alerts=True)
 
 
 @app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])

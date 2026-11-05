@@ -13,7 +13,7 @@ Usar a conta Telegram do usuário por Telethon. O painel conduz telefone, códig
 
 Um único processo FastAPI serve HTML/Jinja, CSS e JavaScript locais e mantém a conexão Telegram. SQLite guarda grupos, regras, ofertas e correspondências. A identidade `(chat_id, message_id)` evita duplicatas; atualizar o texto e recalcular correspondências acontece na mesma transação. Alertas são exibidos no painel; entrega externa não faz parte desta versão.
 
-Palavras-chave são alternativas separadas por vírgula, com limites de palavra e normalização de caixa/acentos. Regras novas se aplicam a mensagens futuras e futuras edições. Desselecionar grupos e remover regras preserva as ofertas existentes.
+Palavras-chave são alternativas separadas por vírgula, com limites de palavra e normalização de caixa/acentos. Criar regra aplica correspondências também às ofertas existentes; mensagens futuras e edições continuam sendo verificadas. Desselecionar grupos e remover regras preserva as ofertas existentes.
 
 Proteger o painel com HTTP Basic (substituído pelo [ADR-0003](ADR-0003-login-painel.md)), senha própria de pelo menos 12 caracteres e CSRF nas mutações. Publicar a porta no loopback; acesso remoto passa por túnel SSH ou HTTPS. Códigos e senhas não são gravados no navegador; o estado temporário do login fica na instância, e a sessão concluída em arquivo persistente.
 
@@ -23,7 +23,7 @@ Distribuir um container sem privilégios com Python 3.12 e volume `/data`. O Com
 
 Não é necessário instalar um bot nos grupos nem operar um banco separado. A sessão salva permite reconectar após reinício, mas dá acesso à conta e deve ser protegida como uma credencial. Uma única instância/worker evita dividir o estado do login e compartilhar a sessão entre processos.
 
-O painel mostra até 100 mensagens por consulta; a base não tem limpeza automática. A decisão de não baixar mídia foi substituída pela [ADR-0002](ADR-0002-conteudo-mensagens-telegram.md). Não há extração de preço, notificações externas nem sincronização de exclusões. Backup, monitoramento de disco e futuras migrações exigem cuidado operacional; veja [operação](../operacao.md).
+O painel mostra até 100 mensagens por consulta. Retenção e gerenciamento de regras foram atualizados pela [ADR-0005](ADR-0005-retencao-e-gerenciamento-alertas.md). A decisão de não baixar mídia foi substituída pela [ADR-0002](ADR-0002-conteudo-mensagens-telegram.md). Não há extração de preço, notificações externas nem sincronização de exclusões. Backup e futuras migrações exigem cuidado operacional; veja [operação](../operacao.md).
 
 ## Revisão de 2026-11-04 — primeira release
 

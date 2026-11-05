@@ -75,3 +75,7 @@ Teste com banco temporário verifica criação aditiva do índice em banco exist
 ## Ações por seleção de texto
 
 Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_selection.py` (ou defina `PLAYWRIGHT_CHROMIUM_EXECUTABLE` para um executável Chromium disponível). O teste cria dados temporários, usa viewport de 390 px e toque simulado, e verifica criação direta, filtro no modal, rascunhos, erros, limites, campos sensíveis e spoilers. A seleção é criada pela API do navegador; o gesto de pressionar e segurar e o menu nativo de dispositivos reais não foram testados.
+
+## Retenção e gerenciamento de regras — 2026-11-05
+
+83 testes passaram com SQLite temporário. Testes cobrem prazos com `offers.date`, regras de prioridade de alertas, álbuns, exclusão manual, backfill retroativo e ofertas ignoradas; dashboard e página dedicada de regras também foram verificados. `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Impacto da limpeza foi verificado separadamente numa cópia local do backup, sem alterar o original; não houve conexão Telegram, Docker ou Chromium.
