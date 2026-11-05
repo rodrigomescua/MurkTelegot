@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnóstico MurkTelegot"
+  short_description: "Investigar falhas e lentidão com evidências"
+  default_prompt: "Use $murktelegot-diagnostico para investigar e corrigir este problema."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Alertas MurkTelegot"
+  short_description: "Alterar alertas e filtros preservando dados"
+  default_prompt: "Use $murktelegot-alertas para implementar esta mudança nos alertas ou filtros."

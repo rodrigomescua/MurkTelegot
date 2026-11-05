@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release MurkTelegot"
+  short_description: "Validar e publicar releases AMD64"
+  default_prompt: "Use $murktelegot-release para preparar e publicar a release solicitada."

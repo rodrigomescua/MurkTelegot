@@ -7,6 +7,7 @@ App pessoal para acompanhar ofertas em grupos e canais Telegram usando a conta d
 ## Orientações de trabalho
 
 - Para exploração estrutural, use a skill instalada `codebase-memory`. Verifique cobertura e consulte diretamente fontes ausentes ou desatualizadas.
+- Para tarefas recorrentes, use as skills em `.agents/skills/`: `murktelegot-release`, `murktelegot-interface`, `murktelegot-alertas` e `murktelegot-diagnostico` quando aplicáveis. Ao delegar, prefira `gpt-6-luna` quando disponível; se indisponível, use outro modelo disponível e informe a limitação.
 - Leia o código responsável e seus chamadores antes de alterar comportamento. Faça a menor mudança completa e preserve validação, autenticação, dados e tratamento de erros.
 - Execute o app e os testes diretamente com Python neste ambiente. Não use Docker ou Docker Compose para testes locais.
 - Produção usa imagem pré-buildada e todas as variáveis no próprio `docker-compose.yml`. Não introduza `build:`, `env_file:` ou dependência de `.env` em produção.

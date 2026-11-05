@@ -1,0 +1,4 @@
+interface:
+  display_name: "Interface MurkTelegot"
+  short_description: "Melhorar o painel e testar em telas móveis"
+  default_prompt: "Use $murktelegot-interface para implementar e verificar esta mudança no painel."
