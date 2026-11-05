@@ -112,9 +112,11 @@ class IgnoredWordsTests(unittest.TestCase):
         reopened = Store(self.store.path)
         self.assertEqual(reopened.rows('SELECT message_id, body FROM offers'),
                          [{'message_id': 1, 'body': 'Oferta antiga'}])
-        where, args = reopened.feed_filter()
-        plan = reopened.rows('EXPLAIN QUERY PLAN SELECT o.id FROM offers o ' + where +
-                             ' ORDER BY date DESC,id DESC LIMIT 100', args)
+        with reopened.connect() as db:
+            reopened._register_ignored_filter(db)
+            where, args = reopened.feed_filter()
+            plan = [dict(row) for row in db.execute('EXPLAIN QUERY PLAN SELECT o.id FROM offers o ' + where +
+                                                    ' ORDER BY date DESC,id DESC LIMIT 100', args)]
         self.assertTrue(any('offers_recent' in row['detail'] for row in plan))
         self.assertEqual(reopened.feed()[0]['message_id'], 1)
 

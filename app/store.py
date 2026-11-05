@@ -114,6 +114,11 @@ class Store:
         finally:
             db.close()
 
+    def _register_ignored_filter(self, db):
+        pattern = ignored_pattern([row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')])
+        db.create_function('ignored_offer', 1,
+                           lambda body: bool(pattern and pattern.search(normalize(body or ''))), deterministic=True)
+
     def rows(self, sql, args=()):
         with self.connect() as db:
             return [dict(row) for row in db.execute(sql, args)]
@@ -296,9 +301,7 @@ class Store:
         short = (now - timedelta(hours=4)).isoformat()
         long = (now - timedelta(hours=24)).isoformat()
         with self.connect() as db:
-            pattern = ignored_pattern([row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')])
-            db.create_function('ignored_offer', 1,
-                               lambda body: bool(pattern and pattern.search(normalize(body or ''))), deterministic=True)
+            self._register_ignored_filter(db)
             db.execute('''WITH
                 groups AS MATERIALIZED (
                     SELECT chat_id,coalesce(grouped_id,'message-' || id) AS group_id,
@@ -334,11 +337,9 @@ class Store:
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
         else:
-            clauses.append('''NOT EXISTS (SELECT 1 FROM ignored_keywords k WHERE
-                ignored_matches(o.body,k.normalized) OR
-                (o.grouped_id IS NOT NULL AND EXISTS (SELECT 1 FROM offers m
-                    WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
-                      AND ignored_matches(m.body,k.normalized))))''')
+            clauses.append('''NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM offers m WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
+                  AND ignored_offer(m.body)))''')
         if q:
             clauses.append("body LIKE ? ESCAPE '\\'")
             args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
@@ -349,6 +350,8 @@ class Store:
         if db is None:
             with self.connect() as db:
                 return self.feed(q, alerts, db, read)
+        if not alerts:
+            self._register_ignored_filter(db)
         where, args = self.feed_filter(q, alerts)
         if alerts and read is not None:
             unread_album = '''EXISTS (SELECT 1 FROM offers m WHERE m.seen=0
@@ -379,12 +382,16 @@ class Store:
         return cards
 
     def new_offers(self, after, q='', alerts=False):
-        where, args = self.feed_filter(q, alerts)
-        return self.rows('''SELECT count(*) AS n FROM (SELECT 1 FROM offers o ''' + where + '''
-            AND o.id > ? AND (o.grouped_id IS NULL OR NOT EXISTS (SELECT 1 FROM offers old
-                WHERE old.chat_id=o.chat_id AND old.grouped_id=o.grouped_id AND old.id<=?))
-            GROUP BY o.chat_id, CASE WHEN o.grouped_id IS NULL THEN 'm:' || o.id
-                                      ELSE 'g:' || o.grouped_id END)''', (*args, after, after))[0]['n']
+        with self.connect() as db:
+            if not alerts:
+                self._register_ignored_filter(db)
+            where, args = self.feed_filter(q, alerts)
+            return db.execute('''SELECT count(*) AS n FROM (SELECT 1 FROM offers o ''' + where + '''
+                AND o.id > ? AND (o.grouped_id IS NULL OR NOT EXISTS (SELECT 1 FROM offers old
+                    WHERE old.chat_id=o.chat_id AND old.grouped_id=o.grouped_id AND old.id<=?))
+                GROUP BY o.chat_id, CASE WHEN o.grouped_id IS NULL THEN 'm:' || o.id
+                                          ELSE 'g:' || o.grouped_id END)''',
+                              (*args, after, after)).fetchone()['n']
 
     def unread(self):
         return self.rows('''SELECT count(*) AS n FROM (
