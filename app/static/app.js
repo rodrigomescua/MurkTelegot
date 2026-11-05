@@ -146,8 +146,17 @@ offerModal.innerHTML = '<div class="modal-heading"><h2 id="offer-modal-title"></
 document.body.append(offerModal);
 let modalDetail;
 let modalSummary;
+let termOffersDialog;
+let termOffersReturn = false;
+let termOffersFocus;
+let refreshTermOffers = () => Promise.resolve(false);
 function showOffer(detail) {
   if (offerModal.open) return;
+  if (termOffersDialog?.open) {
+    termOffersReturn = true;
+    termOffersFocus = detail.querySelector('.offer-summary');
+    termOffersDialog.close();
+  }
   modalDetail = detail;
   modalSummary = detail.querySelector('.offer-summary');
   offerModal.querySelector('#offer-modal-title').textContent = detail.querySelector('.meta strong').textContent;
@@ -160,10 +169,117 @@ offerModal.addEventListener('close', () => {
   const content = offerModal.querySelector('.offer-expanded');
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
   modalDetail.append(content);
-  if (modalSummary.isConnected) modalSummary.focus();
+  if (termOffersReturn && termOffersDialog) {
+    termOffersReturn = false;
+    termOffersDialog.showModal();
+    if (termOffersFocus?.isConnected) termOffersFocus.focus();
+    termOffersFocus = null;
+  } else if (modalSummary.isConnected) modalSummary.focus();
   const status = document.querySelector('#action-status');
   if (offerModal.contains(status)) document.querySelector('main').prepend(status);
 });
+
+const termsPage = document.querySelector('#terms-content');
+if (termsPage) {
+  termOffersDialog = document.createElement('dialog');
+  termOffersDialog.className = 'offer-modal term-offers-modal';
+  termOffersDialog.setAttribute('aria-labelledby', 'term-offers-title');
+  termOffersDialog.innerHTML = '<div class="modal-heading"><h2 id="term-offers-title"></h2><button type="button" class="secondary modal-close term-offers-close">Fechar ✕</button></div><p class="term-offers-status" role="status" aria-live="polite" hidden></p><div class="term-offers-body"></div>';
+  document.body.append(termOffersDialog);
+  const termTitle = termOffersDialog.querySelector('#term-offers-title');
+  const termBody = termOffersDialog.querySelector('.term-offers-body');
+  const termStatus = termOffersDialog.querySelector('.term-offers-status');
+  let termTrigger;
+  let termRequest = 0;
+  let termCurrentUrl;
+  let termActionBusy = false;
+  termOffersDialog.querySelector('.term-offers-close').addEventListener('click', () => termOffersDialog.close());
+  termOffersDialog.addEventListener('close', () => {
+    if (!termOffersReturn) {
+      if (termTrigger?.isConnected) termTrigger.focus();
+      else document.querySelector('#terms-title')?.focus();
+    }
+    const status = document.querySelector('#action-status');
+    if (termOffersDialog.contains(status)) document.querySelector('main').prepend(status);
+  });
+  async function loadTermOffers(url, initial = false) {
+    const request = ++termRequest;
+    termCurrentUrl = url;
+    termStatus.hidden = false;
+    termStatus.textContent = 'Carregando ofertas…';
+    if (initial) termBody.replaceChildren();
+    try {
+      const response = await fetch(url, {credentials: 'same-origin'});
+      if (!response.ok || response.redirected) throw new Error();
+      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const source = doc.querySelector('#term-offers-content');
+      const heading = doc.querySelector('main h1');
+      if (!source || !heading) throw new Error();
+      if (request !== termRequest) return false;
+      termBody.replaceChildren(...source.childNodes);
+      termTitle.textContent = heading.textContent;
+      termStatus.hidden = true;
+      formatTimes(termBody);
+      checkCovers(termBody);
+      return true;
+    } catch {
+      if (request !== termRequest) return false;
+      termStatus.hidden = false;
+      termStatus.textContent = 'Não foi possível carregar as ofertas. Tente novamente.';
+      if (initial) termBody.innerHTML = '<button type="button" class="secondary term-offers-retry">Tentar novamente</button>';
+      return false;
+    }
+  }
+  refreshTermOffers = () => termOffersDialog.open ? loadTermOffers(termCurrentUrl) : Promise.resolve(false);
+  document.addEventListener('click', (event) => {
+    const link = event.target.closest('[data-term-offers]');
+    if (!link || !termsPage.contains(link)) return;
+    if (!termOffersDialog.showModal) return;
+    event.preventDefault();
+    termTrigger = link;
+    termTitle.textContent = link.closest('li')?.querySelector('.term-label strong')?.textContent || '';
+    termOffersDialog.showModal();
+    loadTermOffers(link.href, true);
+  });
+  termOffersDialog.addEventListener('click', (event) => {
+    if (event.target.closest('.term-offers-retry')) {
+      loadTermOffers(termTrigger.href, true);
+      return;
+    }
+    const link = event.target.closest('.terms-pagination a');
+    if (!link) return;
+    event.preventDefault();
+    loadTermOffers(link.href);
+    termOffersDialog.querySelector('.modal-heading').scrollIntoView({block: 'nearest'});
+  });
+  termBody.addEventListener('submit', async (event) => {
+    const form = event.target;
+    if (!form.matches('[data-mark-seen]')) return;
+    event.preventDefault();
+    if (termActionBusy) return;
+    termActionBusy = true;
+    const button = event.submitter || form.querySelector('button');
+    const cardId = form.closest('.offer-card').id;
+    button.disabled = true;
+    let saved = false;
+    try {
+      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível confirmar a leitura. Atualize a lista para conferir.');
+      saved = true;
+      const refreshed = await loadTermOffers(termCurrentUrl);
+      termStatus.hidden = false;
+      termStatus.textContent = refreshed ? (result.message || 'Alerta marcado como lido.') : 'Alerta marcado como lido, mas não foi possível atualizar a lista. Tente novamente.';
+      termBody.querySelector(`#${CSS.escape(cardId)} .offer-summary`)?.focus();
+    } catch (error) {
+      termStatus.hidden = false;
+      termStatus.textContent = saved ? 'Alerta marcado como lido, mas não foi possível atualizar a lista. Tente novamente.' : (error.message || 'Não foi possível confirmar a leitura. Atualize a lista para conferir.');
+    } finally {
+      button.disabled = false;
+      termActionBusy = false;
+    }
+  });
+}
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
   if (!summary) return;
@@ -448,7 +564,8 @@ let selectingAction = false;
 let selectionBusy = false;
 function selectionToast(message, error = false) {
   const status = document.querySelector('#action-status');
-  if (offerModal.open) offerModal.append(status);
+  const dialog = document.querySelector('dialog.offer-modal[open]');
+  if (dialog) dialog.append(status);
   toast(message, error);
 }
 function updateSelectionActions() {
@@ -533,6 +650,7 @@ selectionBar.addEventListener('click', async (event) => {
     if (action === 'ignore') {
       await updateIgnoredList();
       await refreshTerms();
+      await refreshTermOffers();
       document.querySelector('#refresh-feed')?.click();
     } else if (document.querySelector('#rules-list')) {
       const response = await fetch('/', {credentials: 'same-origin'});

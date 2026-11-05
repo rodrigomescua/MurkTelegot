@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block content %}
+<h1>Ofertas com “{{ word }}”</h1>
+<p><a href="/terms">← Voltar aos termos frequentes</a></p>
+<div id="term-offers-content">
+{% if offers %}
+<p class="muted">{{ total }} ofertas com este termo</p>
+<div class="offer-grid">{% for offer in offers %}{% include 'offer_card.html' %}{% endfor %}</div>
+<nav class="terms-pagination" aria-label="Páginas de ofertas">{% if page > 1 %}<a href="/terms/offers?word={{ word|urlencode }}&amp;page={{ page - 1 }}">← Anterior</a>{% endif %}<span>Página {{ page }} de {{ pages }}</span>{% if page < pages %}<a href="/terms/offers?word={{ word|urlencode }}&amp;page={{ page + 1 }}">Próxima →</a>{% endif %}</nav>
+{% else %}<p class="muted">Nenhuma oferta encontrada para este termo.</p>{% endif %}
+</div>
+{% endblock %}

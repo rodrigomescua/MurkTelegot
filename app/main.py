@@ -114,6 +114,14 @@ async def logout(request: Request):
     return response
 
 
+def prepare_offers(offers):
+    for offer in offers:
+        offer['parts'] = [present(part) for part in offer['parts']]
+        offer['preview_lines'] = preview_lines(offer['parts'])
+        offer['cover'] = next((part for part in offer['parts'] if part['media'] and
+                               (part['media']['kind'] == 'photo' or part['media'].get('thumbnail'))), None)
+
+
 @app.get('/alerts', dependencies=[Depends(authenticate)])
 @app.get('/', dependencies=[Depends(authenticate)])
 async def dashboard(request: Request, alerts: bool = False, q: str = '', notice: str = ''):
@@ -124,11 +132,7 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         unread_offers = store.feed(q, True, db, read=False) if alerts else []
         read_offers = store.feed(q, True, db, read=True) if alerts else []
         offers = unread_offers + read_offers if alerts else store.feed(q, False, db)
-    for offer in offers:
-        offer['parts'] = [present(part) for part in offer['parts']]
-        offer['preview_lines'] = preview_lines(offer['parts'])
-        offer['cover'] = next((part for part in offer['parts'] if part['media'] and
-                               (part['media']['kind'] == 'photo' or part['media'].get('thumbnail'))), None)
+    prepare_offers(offers)
     return templates.TemplateResponse(request, 'index.html', {
         'csrf': csrf_token, 'authorized': await telegram.authorized(),
         'configured': bool(telegram.client), 'connection_error': telegram.error,
@@ -338,6 +342,18 @@ def terms_page(request: Request, page: int = 1, notice: str = ''):
         'csrf': csrf_token, 'notice': notice, 'terms': terms[(page - 1) * 50:page * 50],
         'page': page, 'pages': pages, 'total': len(terms),
         'hidden_terms': store.rows('SELECT id,word FROM hidden_suggestions ORDER BY word COLLATE NOCASE'),
+    })
+
+
+@app.get('/terms/offers', dependencies=[Depends(authenticate)])
+def term_offers_page(request: Request, word: str = '', page: int = 1):
+    if not 1 <= len(word) <= 100 or page < 1:
+        raise HTTPException(400, 'Filtro inválido.')
+    offers, total = store.term_offers(word, page)
+    prepare_offers(offers)
+    return templates.TemplateResponse(request, 'term_offers.html', {
+        'csrf': csrf_token, 'word': word, 'offers': offers, 'total': total,
+        'page': page, 'pages': max(1, (total + 19) // 20), 'q': '', 'alerts': False,
     })
 
 

@@ -38,6 +38,38 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertNotIn('https', counts)
         self.assertNotIn('de', counts)
 
+    def test_term_offer_lookup_matches_exact_normalized_phrases_and_pages_albums(self):
+        self.add(1, 'Preço baixo! PS5 oferta', 10)
+        self.add(2, 'preco baixo PS5 https://exemplo.test/preço/baixo', 10)
+        self.add(3, 'PRECO BAIXO PS5')
+        self.add(4, 'preço baixote PS5')
+        self.add(5, 'preço baixo PS5')
+        self.add(6, 'preço baixo PS5')
+        first, total = self.store.term_offers('PRECO BAIXO', 1, 2)
+        second, _ = self.store.term_offers('preço baixo', 2, 2)
+        self.assertEqual(total, 4)
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(second), 2)
+        self.assertEqual(sum(len(card['parts']) for card in first + second), 5)
+        self.assertNotIn(4, [part['message_id'] for card in first + second for part in card['parts']])
+        self.store.add_ignored('preço baixo')
+        self.assertEqual(self.store.term_offers('preço baixo')[1], 0)
+        self.assertEqual(self.store.unread(), 5)
+
+    def test_term_lookup_matches_frequency_for_decomposed_unicode_and_over_100_offers(self):
+        for number in range(1, 105):
+            self.add(number, 'Cafe\u0301 especial PS5')
+        self.add(105, 'PS5 item inicial', 200)
+        self.add(106, 'CAFÉ especial PS5', 200)
+        frequency = next(term['count'] for term in self.store.frequent_terms()
+                         if normalize(term['word']) == normalize('café especial'))
+        album_page, total = self.store.term_offers('cafe\u0301 especial', 1)
+        last_page, _ = self.store.term_offers('café especial', 6)
+        self.assertEqual(frequency, 105)
+        self.assertEqual(total, frequency)
+        self.assertEqual(len(last_page), 5)
+        self.assertEqual(len(album_page[0]['parts']), 2)
+
     def test_persistent_hidden_suggestions_do_not_change_offers_or_alerts(self):
         self.add(1, 'PS5 promoção')
         self.add(2, 'ps5 promocao')
@@ -179,6 +211,20 @@ class FrequentTermsTests(unittest.TestCase):
             response = client.get('/terms?page=2', cookies={'panel_session': token})
             self.assertIn('Página 2 de ', response.text)
             self.assertIn('Anterior', response.text)
+
+    def test_term_offers_route_auth_and_validation(self):
+        self.add(1, 'Promoção bonita')
+        with patch.object(main, 'store', self.store):
+            client = TestClient(main.app)
+            self.assertEqual(client.get('/terms/offers?word=promo%C3%A7%C3%A3o', follow_redirects=False).status_code, 303)
+            token = 'test-term-offers-session'
+            main.sessions[token] = time.monotonic() + 60
+            self.addCleanup(main.sessions.pop, token, None)
+            cookies = {'panel_session': token}
+            self.assertEqual(client.get('/terms/offers?word=x&page=0', cookies=cookies).status_code, 400)
+            self.assertEqual(client.get('/terms/offers?word=', cookies=cookies).status_code, 400)
+            response = client.get('/terms/offers?word=promo%C3%A7%C3%A3o', cookies=cookies)
+            self.assertEqual(response.status_code, 200)
 
 
 if __name__ == '__main__':

@@ -1,7 +1,7 @@
 services:
   murktelegot:
     # Versão fixa para atualizações controladas; imagem somente AMD64.
-    image: ghcr.io/rodrigomescua/murktelegot:0.2.1
+    image: ghcr.io/rodrigomescua/murktelegot:0.2.2
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"

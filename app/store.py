@@ -5,7 +5,6 @@ from contextlib import contextmanager
 import sqlite3
 import unicodedata
 from collections import Counter
-from itertools import groupby
 from pathlib import Path
 
 
@@ -32,6 +31,23 @@ def term_phrases(text):
             if len(chunk) != size or any(text[a.end():b.start()] != ' ' for a, b in zip(chunk, chunk[1:])):
                 break
             yield text[first.start():chunk[-1].end()].casefold(), first.group(), chunk[-1].group()
+
+
+def offer_term_groups(rows, ignored):
+    ignored_pattern = (re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, ignored)) + r')(?![^\W_])')
+                       if ignored else None)
+    key = lambda row: (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else ('message', row['id'])
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(key(row), []).append(row)
+    for parts in grouped.values():
+        if not ignored_pattern or not any(ignored_pattern.search(normalize(part['body'])) for part in parts):
+            yield parts
+
+
+def offer_body_terms(body):
+    body = unicodedata.normalize('NFC', re.sub(r'https?://\S+|www\.\S+', ' ', body, flags=re.IGNORECASE))
+    return term_phrases(body)
 
 
 class Store:
@@ -140,18 +156,11 @@ class Store:
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
             rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY chat_id,grouped_id,id').fetchall()
-        ignored_pattern = (re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, ignored)) + r')(?![^\W_])')
-                           if ignored else None)
         hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
-        key = lambda row: (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else (row['chat_id'], 'message', row['id'])
-        for _, parts in groupby(rows, key):
-            parts = list(parts)
-            if ignored_pattern and any(ignored_pattern.search(normalize(part['body'])) for part in parts):
-                continue
+        for parts in offer_term_groups(rows, ignored):
             terms = {}
             for part in parts:
-                body = unicodedata.normalize('NFC', re.sub(r'https?://\S+|www\.\S+', ' ', part['body'], flags=re.IGNORECASE))
-                for word, first, last in term_phrases(body):
+                for word, first, last in offer_body_terms(part['body']):
                     normalized = normalize(word)
                     if (len(word) <= 100 and len(normalized) > 1 and
                         normalize(first) not in stopwords and normalize(last) not in stopwords and
@@ -162,6 +171,31 @@ class Store:
                 examples.setdefault(term, word)
         return [{'word': examples[term], 'count': count} for term, count in
                 sorted(counts.items(), key=lambda item: (-item[1], item[0])) if count >= 2]
+
+    def term_offers(self, word, page=1, per_page=20):
+        """Return matching visible offer cards, counting albums once."""
+        normalized = normalize(word)
+        with self.connect() as db:
+            db.execute('BEGIN')
+            ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
+            rows = [dict(row) for row in db.execute(
+                '''SELECT o.*,
+                    (SELECT group_concat(r.name, ', ') FROM hits h JOIN rules r ON r.id=h.rule_id
+                     WHERE h.offer_id=o.id) AS rules
+                   FROM offers o ORDER BY o.date DESC,o.id DESC''')]
+        matching = [parts for parts in offer_term_groups(rows, ignored)
+                    if any(normalize(phrase) == normalized
+                           for part in parts for phrase, _, _ in offer_body_terms(part['body']))]
+        total = len(matching)
+        selected = matching[(page - 1) * per_page:page * per_page]
+        cards = []
+        for parts in selected:
+            full_parts = sorted(parts, key=lambda part: part['message_id'])
+            representative = full_parts[0]
+            cards.append({**representative, 'parts': full_parts,
+                'rules': ', '.join(dict.fromkeys(p['rules'] for p in full_parts if p['rules'])),
+                'seen': all(p['seen'] for p in full_parts if p['rules'])})
+        return cards, total
 
     def hide_suggestion(self, word):
         word = word.strip()
