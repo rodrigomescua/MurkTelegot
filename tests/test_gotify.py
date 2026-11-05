@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 import socket
 import ssl
 import urllib.error
@@ -14,6 +16,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from fastapi.testclient import TestClient
 from app.gotify import gotify_message, send_gotify, validate_gotify_token, validate_gotify_url
@@ -213,11 +216,54 @@ class GotifyTests(unittest.TestCase):
         url = f'http://127.0.0.1:{server.server_port}'
         self.assertEqual(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta'), (True, ''))
         self.assertEqual(received[0], ('/base/message', 'test-token', 'Mozilla/5.0 (compatible; MurkTelegot/1.0)', {'title': 'Título', 'message': 'Oferta', 'priority': 5, 'extras': {'client::display': {'contentType': 'text/markdown'}}}))
+        image_url = 'https://panel.example/public-media/1/123/signature'
+        self.assertEqual(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta', image_url), (True, ''))
+        self.assertEqual(received[1][3]['extras']['client::notification']['bigImageUrl'], image_url)
         self.assertIn('HTTP 302', send_gotify(url + '/redirect', 'test-token', 'Título', 'Oferta')[1])
-        self.assertEqual(len(received), 2)
+        self.assertEqual(len(received), 3)
 
 
 class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
+    async def test_album_notification_uses_image_from_any_non_spoiler_part(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.ingest(1, 1, 'Oferta com texto', '2026-11-04T12:00:00+00:00', None,
+                         source_json=json.dumps({'grouped_id': 7}))
+            store.ingest(1, 2, '', '2026-11-04T12:00:01+00:00', None,
+                         source_json=json.dumps({'grouped_id': 7, 'media': {'photo': {'_': 'Photo', 'id': 99}}}))
+            store.save_gotify('http://gotify', 'test-token', True)
+            alert = {'offer_id': 1, 'chat_id': 1, 'message_id': 1, 'grouped_id': '7', 'chat': 'Grupo',
+                     'body': 'Oferta com texto', 'source_json': json.dumps({'grouped_id': 7}), 'url': None}
+            telegram = Telegram(store, Path(directory), None, None)
+            with patch.dict(os.environ, {'APP_PUBLIC_URL': 'https://panel.example'}), \
+                 patch('app.telegram.send_gotify', return_value=(True, '')) as send:
+                await telegram.notify_alert(alert)
+            image_url = send.call_args.kwargs['image_url']
+            self.assertIn('/public-media/2/', image_url)
+
+    async def test_notification_uses_signed_image_url_except_for_spoilers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.save_gotify('http://gotify', 'test-token', True)
+            telegram = Telegram(store, Path(directory), None, None)
+            alert = {'offer_id': 8, 'chat_id': 1, 'message_id': 17, 'chat': 'Grupo', 'body': 'Oferta', 'url': None,
+                     'source_json': json.dumps({'media': {'photo': {'_': 'Photo', 'id': 99}}}), 'rules': ['Oferta']}
+            with patch.dict(os.environ, {'APP_PUBLIC_URL': 'https://panel.example'}), \
+                 patch('app.telegram.send_gotify', return_value=(True, '')) as send:
+                await telegram.notify_alert(alert)
+                image_url = send.call_args.kwargs['image_url']
+                self.assertTrue(image_url.startswith('https://panel.example/public-media/8/'))
+                path = urlsplit(image_url).path.split('/')
+                expiry, signature = int(path[-2]), path[-1]
+                signed = f"1:17:{expiry}"
+                expected = hmac.new(store.media_signing_key().encode(), signed.encode(), hashlib.sha256).hexdigest()
+                self.assertEqual(signature, expected)
+                self.assertIn(image_url, send.call_args.args[3])
+                alert['source_json'] = json.dumps({'media': {'photo': {'_': 'Photo', 'id': 99}, 'spoiler': True}})
+                await telegram.notify_alert(alert)
+                self.assertEqual(send.call_args.kwargs['image_url'], '')
+
     async def test_new_alert_edit_album_and_ignored_offers(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')

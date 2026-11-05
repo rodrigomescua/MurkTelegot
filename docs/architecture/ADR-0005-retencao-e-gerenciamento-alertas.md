@@ -11,7 +11,7 @@ O volume SQLite acumulava mensagens sem limite. Ofertas ignoradas por palavra n�
 
 Usar data Telegram em `offers.date` para calcular retenção, sem adicionar coluna. Apagar ofertas sem alertas após 4 horas quando qualquer parte do álbum corresponde a palavra ignorada; apagar demais ofertas sem alertas após 24 horas. Qualquer parte do álbum com alerta protege o álbum inteiro da limpeza automática. A limpeza roda ao iniciar e a cada cinco minutos.
 
-Permitir exclusão manual de uma oferta alertada com confirmação e CSRF; em álbuns, excluir todas as partes e correspondências associadas. Mover criação, listagem e remoção de regras de alerta para página dedicada. Ao criar regra, aplicar correspondências retroativamente às ofertas existentes, inclusive às ocultas por palavras ignoradas; criar hits no painel sem enviar notificações Gotify retroativas.
+Permitir exclusão manual de uma oferta alertada com confirmação e CSRF; em álbuns, excluir todas as partes e correspondências associadas. Mover criação, listagem e remoção de regras de alerta para página dedicada. Ao criar regra, aplicar correspondências retroativamente às ofertas existentes, inclusive às ocultas por palavras ignoradas; notificar Gotify uma vez por oferta/álbum correspondente.
 
 ## Consequências
 

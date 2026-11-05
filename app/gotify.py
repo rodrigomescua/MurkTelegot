@@ -98,11 +98,13 @@ def markdown_nodes(nodes, plain=False):
     return ''.join(output)
 
 
-def gotify_message(offer):
+def gotify_message(offer, image_url=''):
     source = source_data(offer)
     parser = MarkdownFromHTML()
     parser.feed(str(rich_text(offer.get('body', ''), source.get('entities'))))
     result = markdown_nodes(parser.root)
+    if image_url:
+        result += '\n\n![' + 'Oferta' + '](' + quote(image_url, safe=':/?=&') + ')'
     if media_info(source):
         result += '\n\n📎 Mídia disponível no Telegram.'
     if safe_url(offer.get('url')):
@@ -132,12 +134,13 @@ def connection_error(reason):
     return 'Falha na comunicação com o Gotify. Confira a URL e a conectividade do app.'
 
 
-def send_gotify(url, token, title, message):
+def send_gotify(url, token, title, message, image_url=''):
     try:
         # Cloudflare pode bloquear o User-Agent padrão do Python com erro 1010.
         request = urllib.request.Request(url + '/message', data=json.dumps({
             'title': title, 'message': message, 'priority': 5,
-            'extras': {'client::display': {'contentType': 'text/markdown'}},
+            'extras': {'client::display': {'contentType': 'text/markdown'},
+                       **({'client::notification': {'bigImageUrl': image_url}} if image_url else {})},
         }).encode(), headers={'Content-Type': 'application/json', 'X-Gotify-Key': token,
                     'User-Agent': 'Mozilla/5.0 (compatible; MurkTelegot/1.0)'}, method='POST')
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:

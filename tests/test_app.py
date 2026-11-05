@@ -1,6 +1,9 @@
 import os
+import hashlib
+import hmac
 import tempfile
 import unittest
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -20,6 +23,15 @@ class MatchingTests(unittest.TestCase):
         self.assertFalse(matches('qualquer oferta', ' , '))
         self.assertTrue(matches('C++ em oferta', 'c++'))
 
+    def test_signed_media_access_filter_hides_bearer_url(self):
+        import logging
+        access_filter = main.SignedMediaAccessFilter()
+        signed = logging.LogRecord('uvicorn.access', logging.INFO, '', 0,
+                                   'GET /public-media/1/123/secret HTTP/1.1', (), None)
+        ordinary = logging.LogRecord('uvicorn.access', logging.INFO, '', 0, 'GET /health HTTP/1.1', (), None)
+        self.assertFalse(access_filter.filter(signed))
+        self.assertTrue(access_filter.filter(ordinary))
+
 
 class StoreTests(unittest.TestCase):
     def setUp(self):
@@ -31,6 +43,10 @@ class StoreTests(unittest.TestCase):
 
     def ingest(self, chat=-100123, body='Café barato'):
         self.store.ingest(chat, 1, body, '2026-11-04T12:00:00+00:00', None)
+
+    def test_media_signing_key_persists_in_settings(self):
+        key = self.store.media_signing_key()
+        self.assertEqual(Store(self.store.path).media_signing_key(), key)
 
     def test_only_selected_chats_and_nonempty_messages(self):
         self.ingest(chat=42)
@@ -85,6 +101,16 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT seen FROM offers WHERE message_id IN (10,11)'),
                          [{'seen': 0}, {'seen': 0}])
         self.assertEqual(len(self.store.feed(alerts=True)), 3)
+
+    def test_add_rule_notifies_each_matching_album_once(self):
+        self.store.ingest(-100123, 10, 'Café já alertado', '2026-11-04T12:00:00+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        self.store.ingest(-100123, 11, 'Notebook no mesmo álbum', '2026-11-04T12:00:01+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        self.store.ingest(-100123, 12, 'Notebook novo', '2026-11-04T12:00:02+00:00', None)
+        matched, alerts = self.store.add_rule('Notebook', 'notebook', return_alerts=True)
+        self.assertEqual(matched, 2)
+        self.assertEqual([alert['body'] for alert in alerts], ['Notebook no mesmo álbum', 'Notebook novo'])
 
 
 class WebTests(unittest.TestCase):
@@ -149,10 +175,17 @@ class WebTests(unittest.TestCase):
 
     def test_rule_creation_reports_existing_alerts(self):
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
-        main.store.ingest(-100123, 1, 'Notebook', '2026-11-04T12:00:00+00:00', None)
-        response = self.client.post('/rules', cookies=self.auth, headers={'Accept': 'application/json'},
-            data={'csrf': main.csrf_token, 'name': 'Notebook', 'keywords': 'notebook'})
-        self.assertEqual(response.json()['matched'], 1)
+        main.store.ingest(-100123, 1, 'Notebook capa', '2026-11-04T12:00:00+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        main.store.ingest(-100123, 2, 'Notebook segunda parte', '2026-11-04T12:00:01+00:00', None,
+                          source_json='{"grouped_id": 50}')
+        with patch.object(main.telegram, 'notify_alert', new_callable=AsyncMock) as notify:
+            response = self.client.post('/rules', cookies=self.auth, headers={'Accept': 'application/json'},
+                data={'csrf': main.csrf_token, 'name': 'Notebook', 'keywords': 'notebook'})
+        self.assertEqual(response.json()['matched'], 2)
+        notify.assert_awaited_once()
+        self.assertEqual(notify.await_args.args[0]['body'], 'Notebook capa')
+        self.assertNotIn('token', response.text)
         self.assertIn('Notebook', self.client.get('/alerts', cookies=self.auth).text)
         self.assertEqual(main.store.unread(), 1)
 
@@ -185,6 +218,46 @@ class WebTests(unittest.TestCase):
         self.assertEqual(main.store.rows('SELECT * FROM hits'), [])
         self.assertEqual(self.post('/offers/3/delete').status_code, 404)
         self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+
+    def test_signed_offer_image_requires_valid_unexpired_signature(self):
+        from pathlib import Path
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        main.store.ingest(-100123, 9, 'Oferta com imagem', '2026-11-04T12:00:00+00:00', None,
+                          source_json='{"media":{"photo":{"_":"Photo","id":55}}}')
+        offer = main.store.rows('SELECT * FROM offers')[0]
+        expiry = int(time.time()) + 3600
+        identity = f"{offer['chat_id']}:{offer['message_id']}:{expiry}"
+        signature = hmac.new(main.store.media_signing_key().encode(), identity.encode(), hashlib.sha256).hexdigest()
+        path = f"/public-media/{offer['id']}/{expiry}/{signature}"
+        image = Path(self.tmp.name) / 'thumbnail.jpg'
+        image.write_bytes(b'fake jpeg')
+        with patch.object(main.telegram, 'download', new_callable=AsyncMock, return_value=image):
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers['Cross-Origin-Resource-Policy'], 'cross-origin')
+            self.assertEqual(response.content, b'fake jpeg')
+            self.assertEqual(self.client.get(path.replace(signature, 'bad')).status_code, 404)
+            expired = int(time.time()) - 1
+            expired_identity = f"{offer['chat_id']}:{offer['message_id']}:{expired}"
+            expired_signature = hmac.new(main.store.media_signing_key().encode(), expired_identity.encode(), hashlib.sha256).hexdigest()
+            self.assertEqual(self.client.get(f"/public-media/{offer['id']}/{expired}/{expired_signature}").status_code, 404)
+            future = int(time.time()) + 24 * 60 * 60 + 60
+            future_identity = f"{offer['chat_id']}:{offer['message_id']}:{future}"
+            future_signature = hmac.new(main.store.media_signing_key().encode(), future_identity.encode(), hashlib.sha256).hexdigest()
+            self.assertEqual(self.client.get(f"/public-media/{offer['id']}/{future}/{future_signature}").status_code, 404)
+
+    def test_signed_offer_image_does_not_expose_spoilers(self):
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        main.store.ingest(-100123, 10, 'Oferta com spoiler', '2026-11-04T12:00:00+00:00', None,
+                          source_json='{"media":{"photo":{"_":"Photo","id":56},"spoiler":true}}')
+        offer = main.store.rows('SELECT * FROM offers')[0]
+        expiry = int(time.time()) + 3600
+        identity = f"{offer['chat_id']}:{offer['message_id']}:{expiry}"
+        signature = hmac.new(main.store.media_signing_key().encode(), identity.encode(), hashlib.sha256).hexdigest()
+        with patch.object(main.telegram, 'download', new_callable=AsyncMock) as download:
+            response = self.client.get(f"/public-media/{offer['id']}/{expiry}/{signature}")
+        self.assertEqual(response.status_code, 404)
+        download.assert_not_awaited()
 
     def test_brand_assets_are_accessible_and_used_by_dashboard(self):
         response = self.client.get('/', cookies=self.auth)

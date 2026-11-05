@@ -7,11 +7,13 @@ os.chdir(Path(__file__).resolve().parents[1])
 with tempfile.TemporaryDirectory() as directory:
     env = dict(os.environ, DATA_DIR=directory, APP_PASSWORD='test-password-long-enough', TELEGRAM_API_ID='', TELEGRAM_API_HASH='')
     setup = """from app.store import Store
+from datetime import datetime, timezone
 import json, os
 s=Store(os.path.join(os.environ['DATA_DIR'],'offers.db'))
 s.execute('INSERT INTO chats VALUES(?,?)',(1,'Grupo teste'))
-s.ingest(1,1,'Nintendo Switch em oferta','2026-11-04',None)
-s.ingest(1,2,'Notebook segredo','2026-11-04',None,source_json=json.dumps({'entities':[{'_':'MessageEntitySpoiler','offset':9,'length':7}]}))
+date=datetime.now(timezone.utc).isoformat()
+s.ingest(1,1,'Nintendo Switch em oferta',date,None)
+s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'_':'MessageEntitySpoiler','offset':9,'length':7}]}))
 """
     subprocess.run([sys.executable,'-c',setup],env=env,check=True)
     with socket.socket() as sock:
@@ -26,7 +28,7 @@ s.ingest(1,2,'Notebook segredo','2026-11-04',None,source_json=json.dumps({'entit
             page.on('console', lambda msg: errors.append(msg.text) if msg.type == 'error' and 'Content Security Policy' in msg.text else None)
             page.goto(f'http://127.0.0.1:{port}/')
             page.locator('#username').fill('admin'); page.locator('#panel-password').fill('test-password-long-enough'); page.get_by_role('button',name='Entrar').tap()
-            page.locator('#name').fill('rascunho preservado')
+            page.locator('.offer-card').first.wait_for()
             page.evaluate('window.testSentinel = 123')
             def select(locator, text):
                 locator.scroll_into_view_if_needed()
@@ -35,11 +37,13 @@ s.ingest(1,2,'Notebook segredo','2026-11-04',None,source_json=json.dumps({'entit
                 rect=page.locator('.selection-actions').bounding_box()
                 assert rect['x'] >= 0 and rect['x']+rect['width'] <= 390 and rect['y'] >= 0 and rect['y']+rect['height'] <= 844
             select(page.locator('.offer-card').filter(has_text='Nintendo').locator('.offer-preview'),'Nintendo')
+            assert page.locator('.selection-actions [data-selection-action=rule]').is_visible()
             page.locator('.selection-actions [data-selection-action=rule]').tap()
             page.get_by_text('Regra criada.',exact=False).wait_for()
-            page.locator('#rules-list strong').filter(has_text='Nintendo').wait_for()
-            assert page.locator('#name').input_value() == 'rascunho preservado'
             assert page.evaluate('window.testSentinel') == 123
+            page.goto(f'http://127.0.0.1:{port}/alerts')
+            page.locator('.offer-card').filter(has_text='Nintendo Switch em oferta').first.wait_for()
+            page.goto(f'http://127.0.0.1:{port}/')
             page.locator('.offer-card').filter(has_text='Nintendo').locator('.offer-summary').tap()
             assert page.locator('.offer-modal').evaluate('(el)=>el.open')
             select(page.locator('.offer-modal .message-text'),'Switch')
@@ -49,7 +53,6 @@ s.ingest(1,2,'Notebook segredo','2026-11-04',None,source_json=json.dumps({'entit
             assert page.locator('.offer-modal #action-status').is_visible()
             page.locator('.offer-modal .modal-close').tap()
             page.locator('.offer-card').filter(has_text='Nintendo').wait_for(state='detached')
-            assert page.locator('#name').input_value() == 'rascunho preservado'
             page.locator('.offer-card').filter(has_text='Notebook').locator('.offer-summary').tap()
             text=page.locator('.offer-modal .message-text')
             text.evaluate('''el => {const r=document.createRange();r.selectNodeContents(el);const s=window.getSelection();s.removeAllRanges();s.addRange(r)}''')

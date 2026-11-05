@@ -2,12 +2,15 @@ import asyncio
 import logging
 import os
 import secrets
+import hmac
+import hashlib
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from urllib.parse import urlsplit
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
@@ -18,6 +21,14 @@ from app.store import Store
 from app.telegram import Telegram
 
 logging.basicConfig(level=logging.INFO)
+
+
+class SignedMediaAccessFilter(logging.Filter):
+    def filter(self, record):
+        return '/public-media/' not in record.getMessage()
+
+
+logging.getLogger('uvicorn.access').addFilter(SignedMediaAccessFilter())
 os.umask(0o077)
 data_dir = Path(os.getenv('DATA_DIR', '/data'))
 data_dir.mkdir(parents=True, exist_ok=True)
@@ -27,6 +38,16 @@ if len(password) < 12 or password == 'SUBSTITUA-POR-UMA-SENHA-ALEATORIA-LONGA':
     raise RuntimeError('Set APP_PASSWORD to a unique password with at least 12 characters')
 store = Store(data_dir / 'offers.db')
 telegram = Telegram(store, data_dir, os.getenv('TELEGRAM_API_ID'), os.getenv('TELEGRAM_API_HASH'))
+public_url = os.getenv('APP_PUBLIC_URL', '').strip().rstrip('/')
+if public_url:
+    try:
+        parts = urlsplit(public_url)
+        if (parts.scheme != 'https' or not parts.hostname or parts.username or parts.password or parts.query
+                or parts.fragment or parts.path not in ('', '/')):
+            raise ValueError()
+        parts.port
+    except ValueError:
+        raise RuntimeError('APP_PUBLIC_URL must be a valid HTTPS origin without credentials, query, or fragment')
 csrf_token = secrets.token_urlsafe(32)
 sessions = {}
 SESSION_AGE = 12 * 60 * 60
@@ -75,7 +96,7 @@ async def headers(request, call_next):
     response = await call_next(request)
     response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    response.headers.setdefault('Cross-Origin-Resource-Policy', 'same-origin')
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Cache-Control'] = 'no-store'
     return response
@@ -287,16 +308,21 @@ async def save_groups(chat_ids: list[int] = Form(default=[])):
 
 
 @app.post('/rules', dependencies=[Depends(authenticate), Depends(csrf)])
-async def add_rule(request: Request, name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
+async def add_rule(request: Request, background_tasks: BackgroundTasks,
+                   name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
     valid = bool(name.strip() and any(w.strip() for w in keywords.split(',')))
     matched = 0
     if valid:
-        matched = store.add_rule(name.strip(), keywords.strip())
+        matched, alerts = store.add_rule(name.strip(), keywords.strip(), return_alerts=True)
+        for alert in alerts:
+            background_tasks.add_task(telegram.notify_alert, alert)
     message = (f'Regra criada. Correspondências retroativas: {matched}; mensagens e edições futuras também serão verificadas.' if valid
                else 'Informe um nome e pelo menos uma palavra-chave.')
     if 'application/json' in request.headers.get('accept', ''):
-        return JSONResponse({'ok': valid, 'message': message, 'matched': matched}, status_code=200 if valid else 400)
-    return RedirectResponse('/rules-page?notice=' + message.replace(' ', '+'), status_code=303)
+        return JSONResponse({'ok': valid, 'message': message, 'matched': matched},
+                            status_code=200 if valid else 400, background=background_tasks)
+    return RedirectResponse('/rules-page?notice=' + message.replace(' ', '+'), status_code=303,
+                            background=background_tasks)
 
 
 @app.get('/rules-page', dependencies=[Depends(authenticate)])
@@ -446,6 +472,28 @@ async def offer_media(offer_id: int, thumbnail: bool = False):
     mime = 'image/jpeg' if thumbnail else (info['mime'] if inline else 'application/octet-stream')
     return FileResponse(path, media_type=mime, filename='miniatura.jpg' if thumbnail else info['name'],
                         content_disposition_type='inline' if inline or thumbnail else 'attachment')
+
+
+@app.get('/public-media/{offer_id}/{expiry}/{signature}')
+async def signed_offer_media(offer_id: int, expiry: int, signature: str):
+    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    if not rows or expiry <= int(time.time()) or expiry > int(time.time()) + 24 * 60 * 60:
+        raise HTTPException(404)
+    offer = rows[0]
+    identity = f"{offer['chat_id']}:{offer['message_id']}:{expiry}"
+    expected = hmac.new(store.media_signing_key().encode(), identity.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(404)
+    info = media_info(source_data(offer))
+    if not info or info['kind'] != 'photo' or info['spoiler'] or not info['thumbnail']:
+        raise HTTPException(404)
+    try:
+        path = await telegram.download(offer, thumbnail=True)
+    except (ValueError, errors.RPCError, OSError, asyncio.TimeoutError):
+        raise HTTPException(404)
+    response = FileResponse(path, media_type='image/jpeg', filename='miniatura.jpg', content_disposition_type='inline')
+    response.headers['Cross-Origin-Resource-Policy'] = 'cross-origin'
+    return response
 
 
 @app.post('/offers/{offer_id}/refresh', dependencies=[Depends(authenticate), Depends(csrf)])

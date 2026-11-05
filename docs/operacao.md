@@ -14,6 +14,8 @@ Em desenvolvimento, os dados ficam em `.data/`; no container, em `/data`, montad
 
 Não execute duas instâncias/replicas sobre o mesmo conjunto de dados. Alterações de grupos interrompem somente a coleta futura. Palavras ignoradas ocultam ofertas da listagem principal; ofertas sem alerta são apagadas 4 horas após a data Telegram em `offers.date`. Ofertas sem alerta e sem palavra ignorada são apagadas 24 horas após essa data. Ofertas com alerta, incluindo todas as partes do álbum, permanecem até exclusão manual. A página `/rules-page` gerencia regras de alerta. A limpeza roda ao iniciar e a cada cinco minutos, sem migração de esquema; ofertas antigas podem ser removidas no primeiro início após atualização. Faça backup antes de atualizar.
 
+Para imagens nas notificações Gotify, configure `APP_PUBLIC_URL` com a origem HTTPS pública do app no Compose. Links assinados de miniaturas expiram em 24 horas e permitem acesso sem login até expirar; qualquer pessoa com o link pode ver imagem. Não compartilhe notificações ou links fora do grupo pretendido.
+
 ## Atualização e rollback
 
 1. Pare o app e faça backup completo do diretório de dados; registre a tag atual da imagem.

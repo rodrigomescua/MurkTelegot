@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 from contextlib import contextmanager
 import sqlite3
 import unicodedata
@@ -121,7 +122,7 @@ class Store:
         with self.connect() as db:
             db.execute(sql, args)
 
-    def add_rule(self, name, keywords):
+    def add_rule(self, name, keywords, *, return_alerts=False):
         with self.connect() as db:
             rule_id = db.execute('INSERT INTO rules(name, keywords) VALUES(?,?)',
                                  (name, keywords)).lastrowid
@@ -130,12 +131,34 @@ class Store:
             db.executemany('INSERT INTO hits(offer_id,rule_id) VALUES(?,?)',
                            [(offer_id, rule_id) for offer_id in matched])
             db.executemany('UPDATE offers SET seen=0 WHERE id=?', [(offer_id,) for offer_id in matched])
+            if return_alerts:
+                if not matched:
+                    return 0, []
+                offers = [dict(row) for row in db.execute(
+                    'SELECT * FROM offers WHERE id IN (' + ','.join('?' for _ in matched) + ') ORDER BY id', matched)]
+                notifications, notified_groups = [], set()
+                for row in offers:
+                    group = ((row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None
+                             else (row['chat_id'], 'message', row['id']))
+                    if group in notified_groups:
+                        continue
+                    notified_groups.add(group)
+                    notifications.append({'offer_id': row['id'], 'chat_id': row['chat_id'], 'message_id': row['message_id'],
+                                          'grouped_id': row['grouped_id'], 'source': 'backfill', 'chat': row['chat_title'], 'body': row['body'], 'url': row['url'],
+                                          'source_json': row['source_json'], 'rules': [name]})
+                return len(matched), notifications
             return len(matched)
 
     def gotify_settings(self):
         settings = {row['key']: row['value'] for row in self.rows("SELECT key,value FROM settings WHERE key IN ('gotify_url','gotify_token','gotify_enabled')")}
         return {'url': settings.get('gotify_url', ''), 'token': settings.get('gotify_token', ''),
                 'enabled': settings.get('gotify_enabled') == '1'}
+
+    def media_signing_key(self):
+        with self.connect() as db:
+            db.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('media_signing_key',?)",
+                       (secrets.token_urlsafe(32),))
+            return db.execute("SELECT value FROM settings WHERE key='media_signing_key'").fetchone()['value']
 
     def save_gotify(self, url, token, enabled):
         with self.connect() as db:
@@ -262,7 +285,10 @@ class Store:
                     db.execute('INSERT INTO hits VALUES(?,?)', (offer_id, rule['id']))
                     matched.append(rule['name'])
             if report_alert:
-                return offer_id, {'chat': chat['title'], 'body': body or '', 'url': url, 'source_json': source_json, 'rules': matched} if matched and not had_alert else None
+                return offer_id, {'offer_id': offer_id, 'chat_id': chat_id, 'message_id': message_id,
+                                  'grouped_id': str(grouped) if grouped is not None else None, 'source': 'telegram',
+                                  'chat': chat['title'], 'body': body or '', 'url': url, 'source_json': source_json,
+                                  'rules': matched} if matched and not had_alert else None
             return offer_id
 
     def expire_offers(self, now=None):

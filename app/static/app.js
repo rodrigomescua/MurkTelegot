@@ -587,7 +587,6 @@ function updateSelectionActions() {
   const rule = selectionBar.querySelector('[data-selection-action="rule"]');
   const ignored = selectionBar.querySelector('[data-selection-action="ignore"]');
   const help = selectionBar.querySelector('.selection-help');
-  rule.hidden = location.pathname !== '/rules-page';
   rule.disabled = selectedText.length > 100 || selectedText.includes(',');
   ignored.disabled = selectedText.length > 100;
   help.textContent = selectedText.length > 100 ? 'Selecione até 100 caracteres.' :

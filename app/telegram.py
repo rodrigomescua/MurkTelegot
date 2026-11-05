@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import hashlib
+import hmac
 import json
 import os
+import time
 from pathlib import Path
 import shutil
 import tempfile
@@ -114,10 +116,24 @@ class Telegram:
         config = self.store.gotify_settings()
         if not (config['enabled'] and config['url'] and config['token']):
             return
-        content = gotify_message(alert)
+        image_url = ''
+        base_url = os.getenv('APP_PUBLIC_URL', '').rstrip('/')
+        image_offer = alert
+        if alert.get('grouped_id') is not None:
+            parts = self.store.rows('SELECT * FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY id',
+                                    (alert['chat_id'], alert['grouped_id']))
+            image_offer = next((part for part in parts if (info := media_info(source_data(part)))
+                                and info['kind'] == 'photo' and not info['spoiler'] and info['thumbnail']), alert)
+        info = media_info(source_data(image_offer))
+        if base_url and info and info['kind'] == 'photo' and not info['spoiler'] and info['thumbnail']:
+            expiry = int(time.time()) + 24 * 60 * 60
+            identity = f"{image_offer['chat_id']}:{image_offer['message_id']}:{expiry}"
+            signature = hmac.new(self.store.media_signing_key().encode(), identity.encode(), hashlib.sha256).hexdigest()
+            image_url = f'{base_url}/public-media/{image_offer["id"] if "id" in image_offer else image_offer["offer_id"]}/{expiry}/{signature}'
+        content = gotify_message(alert, image_url=image_url)
         async with self.notification_slots:
             sent, detail = await asyncio.to_thread(send_gotify, config['url'], config['token'],
-                                           'Novo alerta · ' + alert['chat'], content)
+                                           'Novo alerta · ' + alert['chat'], content, image_url=image_url)
         if not sent:
             log.warning('Falha ao enviar notificação Gotify: %s; alerta mantido no painel', detail)
 

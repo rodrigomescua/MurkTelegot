@@ -78,4 +78,4 @@ Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_se
 
 ## Retenção e gerenciamento de regras — 2026-11-05
 
-83 testes passaram com SQLite temporário. Testes cobrem prazos com `offers.date`, regras de prioridade de alertas, álbuns, exclusão manual, backfill retroativo e ofertas ignoradas; dashboard e página dedicada de regras também foram verificados. `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Impacto da limpeza foi verificado separadamente numa cópia local do backup, sem alterar o original; não houve conexão Telegram, Docker ou Chromium.
+90 testes passaram com SQLite temporário. Testes cobrem prazos com `offers.date`, regras de prioridade, exclusão manual, backfill e Gotify retroativos por álbum, imagens com URL assinada, expiração, assinatura inválida e spoilers. `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile` e `git diff --check` passaram. Chromium móvel executou `tests/browser_selection.py` com dados temporários e aprovou seleção/criação de alerta, spoilers e campos sensíveis. Não houve conexão Telegram, Gotify real ou Docker.
