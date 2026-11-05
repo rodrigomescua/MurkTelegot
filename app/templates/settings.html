@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Configurações</h1>
+{% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
+<section aria-labelledby="gotify-title">
+<h2 id="gotify-title">Notificações Gotify</h2>
+<p>Receba uma notificação com o texto e o link da oferta quando ela gerar um novo alerta, inclusive se estiver oculta por palavras ignoradas.</p>
+<form method="post" action="/settings/gotify">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="gotify-url">URL do servidor Gotify</label><input id="gotify-url" name="url" type="url" maxlength="2048" value="{{ gotify_url }}" placeholder="https://gotify.exemplo.com" autocomplete="url">
+<label for="gotify-token">Token da aplicação Gotify</label><input id="gotify-token" name="token" type="password" maxlength="256" autocomplete="new-password" placeholder="{{ 'Deixe em branco para manter o token salvo' if token_configured else 'Token da aplicação' }}" aria-describedby="gotify-token-help">
+<p id="gotify-token-help" class="field-help">{{ 'Token configurado. Deixe em branco para mantê-lo.' if token_configured else 'Crie uma aplicação no Gotify e informe o token dela.' }} O token fica salvo no volume de dados.</p>
+<label class="check"><input type="checkbox" name="enabled" value="true" {% if gotify_enabled %}checked{% endif %}> Ativar notificações de alertas</label>
+<button>Salvar configurações</button>
+</form>
+<div class="toolbar"><form method="post" action="/settings/gotify/test"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Enviar teste com configuração salva</button></form>{% if token_configured or gotify_url %}<form method="post" action="/settings/gotify/clear" data-confirm="Remover a URL e o token Gotify salvos?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remover configuração</button></form>{% endif %}</div>
+<p class="field-help">O teste usa os dados já salvos. As notificações usam formatação compatível com o Gotify; spoilers ficam ocultos e mídias podem ser abertas no Telegram. Falhas não interrompem a coleta e não são reenviadas automaticamente.</p>
+</section>
+{% endblock %}

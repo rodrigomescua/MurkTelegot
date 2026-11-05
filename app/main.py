@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
+from app.gotify import send_gotify, validate_gotify_token, validate_gotify_url
 from app.messages import media_info, present, preview_lines, source_data
 from app.store import Store
 from app.telegram import Telegram
@@ -199,6 +200,49 @@ async def telegram_action(request: Request, action: str, phone: str = Form('', m
             return await reply('Telegram recusou a operação. Confira seus dados e tente novamente.')
         except (OSError, asyncio.TimeoutError):
             return await reply('Falha de conexão com o Telegram. Seus campos foram mantidos; tente novamente.')
+
+
+@app.get('/settings', dependencies=[Depends(authenticate)])
+async def settings_page(request: Request, notice: str = ''):
+    config = store.gotify_settings()
+    return templates.TemplateResponse(request, 'settings.html', {
+        'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
+        'token_configured': bool(config['token']), 'notice': notice,
+    })
+
+
+def settings_redirect(message):
+    from urllib.parse import urlencode
+    return RedirectResponse('/settings?' + urlencode({'notice': message}), status_code=303)
+
+
+@app.post('/settings/gotify', dependencies=[Depends(authenticate), Depends(csrf)])
+async def save_gotify_settings(url: str = Form('', max_length=2048), token: str = Form('', max_length=256),
+                               enabled: bool = Form(False)):
+    try:
+        url = validate_gotify_url(url)
+        validate_gotify_token(token)
+        store.save_gotify(url, token, enabled)
+    except ValueError as exc:
+        return settings_redirect(str(exc))
+    return settings_redirect('Configuração Gotify salva.')
+
+
+@app.post('/settings/gotify/clear', dependencies=[Depends(authenticate), Depends(csrf)])
+async def clear_gotify_settings():
+    store.clear_gotify()
+    return settings_redirect('Configuração Gotify removida.')
+
+
+@app.post('/settings/gotify/test', dependencies=[Depends(authenticate), Depends(csrf)])
+async def test_gotify_settings():
+    config = store.gotify_settings()
+    if not config['url'] or not config['token']:
+        return settings_redirect('Salve a URL e o token Gotify antes de testar.')
+    sent = await asyncio.to_thread(send_gotify, config['url'], config['token'],
+                                   'Teste · MurkTelegot', 'As notificações Gotify estão configuradas.')
+    return settings_redirect('Notificação de teste enviada.' if sent else
+                             'Não foi possível enviar o teste. Confira a URL, o token e a conexão.')
 
 
 @app.get('/groups', dependencies=[Depends(authenticate)])

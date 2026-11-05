@@ -32,3 +32,7 @@ No Telethon 1.40.0, o aviso `Using async sessions support is an experimental fea
 Conteúdo original e metadados ficam no SQLite; mídia é obtida do Telegram no primeiro acesso e guardada em `/data/media`, acessível apenas mediante autenticação. O servidor mantém ao menos 64 MiB livres e interrompe downloads que excedam 120 segundos. Se o original tiver sido removido ou alterado antes do primeiro acesso, use o link do Telegram ou atualize a mensagem. Não há limpeza automática de mídia.
 
 Em mensagens coletadas antes desta versão, use **Recuperar original** para buscar individualmente o conteúdo atual e os itens do mesmo álbum, quando disponíveis no Telegram. O grupo deve estar selecionado; não há importação geral automática.
+
+## Gotify
+
+A configuração do Gotify é feita no painel e fica no banco do volume, incluindo o token em texto legível para o processo; proteja o diretório e os backups. A URL precisa ser acessível a partir do processo/container. A tabela de configurações é aditiva; versões anteriores ignoram seus registros. Envios usam uma tentativa por novo alerta e um timeout de cinco segundos; falhas são registradas sem o token e não removem alertas nem são reenviadas automaticamente.

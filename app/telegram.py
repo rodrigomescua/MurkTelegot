@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
+from app.gotify import gotify_message, send_gotify
 from app.messages import media_info, message_link, source_data
 
 from telethon import TelegramClient, events, errors, utils
@@ -19,6 +20,7 @@ class Telegram:
         self.store = store
         self.media_dir = Path(data_dir) / 'media'
         self.media_slots = asyncio.Semaphore(2)
+        self.notification_slots = asyncio.Semaphore(4)
         self.client = TelegramClient(str(data_dir / 'telegram'), int(api_id), api_hash) if api_id and api_hash else None
         self.phone = None
         self.code_hash = None
@@ -87,23 +89,37 @@ class Telegram:
         return [{'id': dialog.id, 'title': dialog.name or str(dialog.id)}
                 async for dialog in self.client.iter_dialogs() if dialog.is_group or dialog.is_channel]
 
-    def save_message(self, chat_id, message):
+    def save_message(self, chat_id, message, *, report_alert=False):
         source = json.loads(message.to_json())
         sender = getattr(message, 'sender', None)
         if sender:
             source['_sender_name'] = utils.get_display_name(sender)
         return self.store.ingest(chat_id, message.id, message.raw_text,
                                  message.date.isoformat(), message_link(chat_id, message.id),
-                                 source_json=json.dumps(source))
+                                 source_json=json.dumps(source), report_alert=report_alert)
 
     async def receive(self, event):
         try:
             # Only selected chats are stored; private conversations never enter the database.
             if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
                 return
-            self.save_message(event.chat_id, event.message)
+            result = self.save_message(event.chat_id, event.message, report_alert=True)
+            await self.notify_alert(result[1] if result else None)
         except Exception:
             log.warning('Failed to store a Telegram message; private content omitted from logs')
+
+    async def notify_alert(self, alert):
+        if not alert:
+            return
+        config = self.store.gotify_settings()
+        if not (config['enabled'] and config['url'] and config['token']):
+            return
+        content = gotify_message(alert)
+        async with self.notification_slots:
+            sent = await asyncio.to_thread(send_gotify, config['url'], config['token'],
+                                           'Novo alerta · ' + alert['chat'], content)
+        if not sent:
+            log.warning('Falha ao enviar notificação Gotify; alerta mantido no painel')
 
     async def refresh(self, offer):
         if not await self.authorized():
@@ -120,7 +136,8 @@ class Telegram:
             if not any(m.id == message.id for m in messages):
                 messages.append(message)
         for item in messages:
-            self.save_message(offer['chat_id'], item)
+            result = self.save_message(offer['chat_id'], item, report_alert=True)
+            await self.notify_alert(result[1] if result else None)
 
     async def download(self, offer, thumbnail=False):
         source = source_data(offer)

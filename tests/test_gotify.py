@@ -1,0 +1,213 @@
+import json
+import os
+from pathlib import Path
+import tempfile
+import threading
+import time
+import unittest
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from fastapi.testclient import TestClient
+from app.gotify import gotify_message, send_gotify, validate_gotify_token, validate_gotify_url
+from app.store import Store
+from app.telegram import Telegram
+
+_runtime = tempfile.TemporaryDirectory()
+os.environ.update(DATA_DIR=_runtime.name, APP_PASSWORD='test-password-with-32-characters')
+from app import main
+
+
+class GotifyTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.store = Store(Path(self.tmp.name) / 'db.sqlite')
+
+    def test_validation_and_settings_persist_without_exposing_token(self):
+        for url in ('ftp://gotify.local', 'http://user:secret@host', 'http://host?token=secret', 'http://host:99999', 'http://host\nheader'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                validate_gotify_url(url)
+        with self.assertRaises(ValueError):
+            validate_gotify_token('bad\nheader')
+        self.assertEqual(validate_gotify_url('http://gotify.local/base/'), 'http://gotify.local/base')
+        with patch.object(main, 'store', self.store):
+            client = TestClient(main.app)
+            session = 'test-gotify-settings'
+            main.sessions[session] = time.monotonic() + 60
+            self.addCleanup(main.sessions.pop, session, None)
+            cookies = {'panel_session': session}
+            self.assertEqual(client.get('/settings', follow_redirects=False).status_code, 303)
+            self.assertEqual(client.post('/settings/gotify', cookies=cookies, data={'url':'http://gotify', 'token':'secret-test', 'enabled':'true'}).status_code, 403)
+            saved = client.post('/settings/gotify', cookies=cookies, follow_redirects=False, data={
+                'csrf': main.csrf_token, 'url': 'http://gotify/base/', 'token': 'secret-test', 'enabled': 'true'})
+            self.assertEqual(saved.status_code, 303)
+            self.assertNotIn('secret-test', saved.headers['location'])
+            page = client.get('/settings', cookies=cookies)
+            self.assertNotIn('secret-test', page.text)
+            self.assertIn('Token configurado', page.text)
+            self.assertTrue(Store(self.store.path).gotify_settings()['enabled'])
+            rejected = client.post('/settings/gotify', cookies=cookies, follow_redirects=False, data={
+                'csrf': main.csrf_token, 'url': 'http://user:secret@gotify', 'enabled': 'true'})
+            self.assertNotIn('secret', rejected.headers['location'])
+            self.assertEqual(self.store.gotify_settings()['url'], 'http://gotify/base')
+            self.assertEqual(client.post('/settings/gotify/test', cookies=cookies).status_code, 403)
+            with patch('app.main.send_gotify', return_value=True) as send:
+                tested = client.post('/settings/gotify/test', cookies=cookies, follow_redirects=False, data={'csrf': main.csrf_token})
+                self.assertEqual(tested.status_code, 303)
+                send.assert_called_once()
+                self.assertNotIn('secret-test', tested.headers['location'])
+            client.post('/settings/gotify', cookies=cookies, data={'csrf': main.csrf_token, 'url':'http://gotify/base'})
+            config = self.store.gotify_settings()
+            self.assertEqual(config['token'], 'secret-test')
+            self.assertFalse(config['enabled'])
+            client.post('/settings/gotify/clear', cookies=cookies, data={'csrf': main.csrf_token})
+            self.assertEqual(self.store.gotify_settings()['token'], '')
+
+    def test_markdown_formats_utf16_links_and_escapes_untrusted_text(self):
+        body = '😀 Café link *literal* <script>'
+        source = {'entities': [
+            {'_': 'MessageEntityBold', 'offset': 3, 'length': 4},
+            {'_': 'MessageEntityTextUrl', 'offset': 8, 'length': 4, 'url': 'https://example.com/a(b)'},
+        ]}
+        result = gotify_message({'body': body, 'source_json': json.dumps(source), 'url': 'https://t.me/c/123/1'})
+        self.assertIn('😀 **Café** [link](https://example.com/a%28b%29)', result)
+        self.assertIn(r'\*literal\*', result)
+        self.assertIn('&lt;script&gt;', result)
+        self.assertIn('[Abrir oferta no Telegram](https://t.me/c/123/1)', result)
+        self.assertNotIn('<script>', result)
+
+    def test_markdown_hides_spoilers_and_blocks_unsafe_links(self):
+        body = 'segredo clique'
+        source = {'entities': [
+            {'_': 'MessageEntitySpoiler', 'offset': 0, 'length': 7},
+            {'_': 'MessageEntityTextUrl', 'offset': 8, 'length': 6, 'url': 'javascript:alert(1)'},
+        ]}
+        result = gotify_message({'body': body, 'source_json': json.dumps(source)})
+        self.assertNotIn('segredo', result)
+        self.assertIn('spoiler oculto', result)
+        self.assertIn('clique', result)
+        self.assertNotIn('javascript:', result)
+
+    def test_markdown_nested_styles_quotes_and_spoilers(self):
+        text = 'Oferta segredo\nDetalhes'
+        source = {'entities': [
+            {'_': 'MessageEntityBold', 'offset': 0, 'length': 13},
+            {'_': 'MessageEntityItalic', 'offset': 0, 'length': 6},
+            {'_': 'MessageEntitySpoiler', 'offset': 7, 'length': 7},
+            {'_': 'MessageEntityBlockquote', 'offset': 15, 'length': 8},
+        ]}
+        result = gotify_message({'body': text, 'source_json': json.dumps(source)})
+        self.assertIn('*Oferta*', result)
+        self.assertTrue(result.startswith('**'))
+        self.assertIn('spoiler oculto', result)
+        self.assertNotIn('segredo', result)
+        self.assertIn('> Detalhes', result)
+        inline = gotify_message({'body': 'a`b', 'source_json': json.dumps({'entities': [{'_':'MessageEntityCode', 'offset':0, 'length':3}]})})
+        self.assertEqual(inline, '`` a`b ``')
+
+    def test_markdown_pre_code_strike_and_spoiler_media(self):
+        source = {'entities': [{'_': 'MessageEntityPre', 'offset': 0, 'length': 5}],
+                  'media': {'_': 'MessageMediaPhoto', 'photo': {'_': 'Photo', 'id': 1}, 'spoiler': True}}
+        result = gotify_message({'body': 'a`bcd', 'source_json': json.dumps(source)})
+        self.assertTrue(result.startswith('```\na`bcd\n```'))
+        self.assertIn('Mídia disponível no Telegram', result)
+        strike = gotify_message({'body': 'oferta', 'source_json': json.dumps({'entities': [{'_':'MessageEntityStrike', 'offset':0, 'length':6}]})})
+        self.assertEqual(strike, '~~oferta~~')
+
+    def test_old_database_adds_settings_without_changing_offers(self):
+        self.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+        self.store.ingest(1, 1, 'Oferta', '2026-11-04', None)
+        self.store.execute('DROP TABLE settings')
+        before = self.store.rows('SELECT * FROM offers')
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.rows('SELECT * FROM offers'), before)
+        self.assertEqual(reopened.gotify_settings(), {'url': '', 'token': '', 'enabled': False})
+
+    def test_http_protocol_and_redirect_does_not_forward_token(self):
+        received = []
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append((self.path, self.headers.get('X-Gotify-Key'), json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+                self.send_response(302 if self.path == '/redirect/message' else 200)
+                if self.path == '/redirect/message':
+                    self.send_header('Location', '/other')
+                self.end_headers()
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}'
+        self.assertTrue(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta'))
+        self.assertEqual(received[0], ('/base/message', 'test-token', {'title': 'Título', 'message': 'Oferta', 'priority': 5, 'extras': {'client::display': {'contentType': 'text/markdown'}}}))
+        self.assertFalse(send_gotify(url + '/redirect', 'test-token', 'Título', 'Oferta'))
+        self.assertEqual(len(received), 2)
+
+
+class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
+    async def test_new_alert_edit_album_and_ignored_offers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.add_ignored('PS5')
+            store.save_gotify('http://gotify', 'test-token', True)
+            telegram = Telegram(store, Path(directory), None, None)
+            def event(mid, body, group=None, chat=1):
+                message = SimpleNamespace(id=mid, raw_text=body, date=datetime.now(timezone.utc),
+                                          to_json=lambda: json.dumps({'grouped_id': group, 'entities': [{'_': 'MessageEntityBold', 'offset': 0, 'length': 8}]}))
+                return SimpleNamespace(chat_id=chat, message=message)
+            with patch('app.telegram.send_gotify', return_value=True) as send:
+                await telegram.receive(event(1, 'Notebook PS5', group=9))
+                await telegram.receive(event(1, 'Notebook PS5', group=9))
+                await telegram.receive(event(2, 'Notebook PS5', group=9))
+                await telegram.receive(event(3, 'Outros produtos'))
+                await telegram.receive(event(3, 'Notebook editado'))
+                await telegram.receive(event(4, 'Notebook', chat=999))
+                self.assertEqual(send.call_count, 2)
+                self.assertIn('**Notebook** PS5', send.call_args_list[0].args[3])
+                self.assertEqual(len(store.feed()), 1)
+                self.assertEqual(store.unread(), 2)
+
+    async def test_refresh_also_sends_new_alert_once(self):
+        from unittest.mock import AsyncMock
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.save_gotify('http://gotify', 'test-token', True)
+            store.ingest(1, 1, 'Sem correspondência', '2026-11-04', None)
+            telegram = Telegram(store, Path(directory), None, None)
+            telegram.authorized = AsyncMock(return_value=True)
+            message = SimpleNamespace(id=1, raw_text='Notebook atualizado', date=datetime.now(timezone.utc),
+                                      grouped_id=None, to_json=lambda: '{}')
+            telegram.client = SimpleNamespace(get_messages=AsyncMock(return_value=message))
+            offer = store.rows('SELECT * FROM offers')[0]
+            with patch('app.telegram.send_gotify', return_value=True) as send:
+                await telegram.refresh(offer)
+                await telegram.refresh(offer)
+                send.assert_called_once()
+                self.assertEqual(store.unread(), 1)
+
+    async def test_failure_does_not_lose_alert_and_disabled_does_not_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            telegram = Telegram(store, Path(directory), None, None)
+            def event(mid):
+                message = SimpleNamespace(id=mid, raw_text='Notebook', date=datetime.now(timezone.utc), to_json=lambda: '{}')
+                return SimpleNamespace(chat_id=1, message=message)
+            with patch('app.telegram.send_gotify', return_value=False) as send:
+                await telegram.receive(event(1))
+                send.assert_not_called()
+                store.save_gotify('http://gotify', 'test-token', True)
+                await telegram.receive(event(2))
+                send.assert_called_once()
+                self.assertEqual(store.unread(), 2)

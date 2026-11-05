@@ -54,6 +54,7 @@ class Store:
                     finally:
                         temporary.unlink(missing_ok=True)
             db.executescript('''
+                CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS rules (
                     id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL);
@@ -98,6 +99,25 @@ class Store:
     def execute(self, sql, args=()):
         with self.connect() as db:
             db.execute(sql, args)
+
+    def gotify_settings(self):
+        settings = {row['key']: row['value'] for row in self.rows("SELECT key,value FROM settings WHERE key IN ('gotify_url','gotify_token','gotify_enabled')")}
+        return {'url': settings.get('gotify_url', ''), 'token': settings.get('gotify_token', ''),
+                'enabled': settings.get('gotify_enabled') == '1'}
+
+    def save_gotify(self, url, token, enabled):
+        with self.connect() as db:
+            if not token:
+                row = db.execute("SELECT value FROM settings WHERE key='gotify_token'").fetchone()
+                token = row['value'] if row else ''
+            if enabled and (not url or not token):
+                raise ValueError('Informe a URL e o token para ativar o Gotify.')
+            db.executemany('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                           [('gotify_url', url), ('gotify_token', token), ('gotify_enabled', '1' if enabled else '0')])
+
+    def clear_gotify(self):
+        with self.connect() as db:
+            db.execute("DELETE FROM settings WHERE key IN ('gotify_url','gotify_token','gotify_enabled')")
 
     def add_ignored(self, word):
         word = word.strip()
@@ -165,12 +185,18 @@ class Store:
             db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items)
             return db.total_changes - before
 
-    def ingest(self, chat_id, message_id, body, date, url, *, source_json=None):
+    def ingest(self, chat_id, message_id, body, date, url, *, source_json=None, report_alert=False):
         grouped = json.loads(source_json).get('grouped_id') if source_json else None
         with self.connect() as db:
             chat = db.execute('SELECT title FROM chats WHERE id=?', (chat_id,)).fetchone()
             if not chat or (not body and not source_json):
                 return
+            had_alert = False
+            if report_alert:
+                had_alert = bool(db.execute('''SELECT 1 FROM offers o JOIN hits h ON h.offer_id=o.id
+                    WHERE o.chat_id=? AND (o.message_id=? OR (? IS NOT NULL AND o.grouped_id=?)) LIMIT 1''',
+                    (chat_id, message_id, str(grouped) if grouped is not None else None,
+                     str(grouped) if grouped is not None else None)).fetchone())
             db.execute('''INSERT INTO offers(chat_id,message_id,chat_title,body,date,url,source_json,grouped_id)
                           VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(chat_id,message_id)
                           DO UPDATE SET body=excluded.body,url=excluded.url,
@@ -180,9 +206,13 @@ class Store:
             offer_id = db.execute('SELECT id FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()['id']
             db.execute('DELETE FROM hits WHERE offer_id=?', (offer_id,))
+            matched = []
             for rule in db.execute('SELECT * FROM rules').fetchall():
                 if matches(body or '', rule['keywords']):
                     db.execute('INSERT INTO hits VALUES(?,?)', (offer_id, rule['id']))
+                    matched.append(rule['name'])
+            if report_alert:
+                return offer_id, {'chat': chat['title'], 'body': body or '', 'url': url, 'source_json': source_json, 'rules': matched} if matched and not had_alert else None
             return offer_id
 
     def feed_filter(self, q='', alerts=False):

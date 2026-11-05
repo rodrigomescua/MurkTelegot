@@ -55,3 +55,11 @@ Testes com dados temporários verificam operações atômicas, validação, limi
 ## Frequência e filtros
 
 Testes com dados temporários verificam que ofertas ignoradas e álbuns com partes ignoradas não entram nas frequências; palavras e expressões inteiras contidas em sugestões ocultas deixam de aparecer, com restauração e alertas preservados.
+
+## Notificações Gotify
+
+Testes com dados temporários e servidor HTTP local simulado verificam configuração, autenticação, CSRF, sigilo do token na resposta, envio, recusa de redirecionamento, alertas ignorados, edições e falhas. Chromium em 390 px verificou a tela e o envio de teste simulado. Não foi testado um servidor Gotify real nem Docker.
+
+## Formatação Gotify
+
+Testes com dados temporários verificam metadados Markdown no protocolo Gotify, entidades UTF-16, links seguros, texto escapado, código, citações, spoilers ocultos e indicação de mídia. A exibição em clientes Gotify reais não foi testada.
