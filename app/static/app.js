@@ -403,7 +403,7 @@ if (feed) {
       if (!response.ok || !(await response.json()).ok) throw new Error();
       saved = true;
       await loadPage(await fetch(`${feed.dataset.alerts === 'true' ? '/alerts' : '/'}?${query}`, {credentials: 'same-origin'}));
-      document.getElementById(cardId)?.querySelector('.offer-summary')?.focus();
+      document.getElementById(cardId)?.querySelector('.offer-summary')?.focus({preventScroll: true});
       toast('Alerta marcado como lido.');
       await poll();
     } catch {
