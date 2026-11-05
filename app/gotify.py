@@ -134,10 +134,12 @@ def connection_error(reason):
 
 def send_gotify(url, token, title, message):
     try:
+        # Cloudflare pode bloquear o User-Agent padrão do Python com erro 1010.
         request = urllib.request.Request(url + '/message', data=json.dumps({
             'title': title, 'message': message, 'priority': 5,
             'extras': {'client::display': {'contentType': 'text/markdown'}},
-        }).encode(), headers={'Content-Type': 'application/json', 'X-Gotify-Key': token}, method='POST')
+        }).encode(), headers={'Content-Type': 'application/json', 'X-Gotify-Key': token,
+                    'User-Agent': 'Mozilla/5.0 (compatible; MurkTelegot/1.0)'}, method='POST')
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:
             if 200 <= response.status < 300:
                 return True, ''

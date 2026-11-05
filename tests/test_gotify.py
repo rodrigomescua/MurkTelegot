@@ -2,6 +2,7 @@ import json
 import socket
 import ssl
 import urllib.error
+import urllib.request
 from unittest.mock import Mock
 import os
 from pathlib import Path
@@ -171,11 +172,32 @@ class GotifyTests(unittest.TestCase):
                 self.assertIn('HTTP 401', '\n'.join(logs.output))
                 self.assertNotIn('secret-test', response.headers['location'] + page.text + '\n'.join(logs.output))
 
+    def test_cloudflare_style_user_agent_restriction(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                allowed = self.headers.get('User-Agent') == 'Mozilla/5.0 (compatible; MurkTelegot/1.0)'
+                self.send_response(200 if allowed else 403)
+                self.end_headers()
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_port}'
+        request = urllib.request.Request(url + '/message', data=b'{}', method='POST')
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request, timeout=5)
+        self.assertEqual(error.exception.code, 403)
+        self.assertEqual(send_gotify(url, 'test-token', 'Título', 'Oferta'), (True, ''))
+
     def test_http_protocol_and_redirect_does_not_forward_token(self):
         received = []
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
-                received.append((self.path, self.headers.get('X-Gotify-Key'), json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
+                received.append((self.path, self.headers.get('X-Gotify-Key'), self.headers.get('User-Agent'), json.loads(self.rfile.read(int(self.headers['Content-Length'])))))
                 self.send_response(302 if self.path == '/redirect/message' else 200)
                 if self.path == '/redirect/message':
                     self.send_header('Location', '/other')
@@ -190,7 +212,7 @@ class GotifyTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         url = f'http://127.0.0.1:{server.server_port}'
         self.assertEqual(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta'), (True, ''))
-        self.assertEqual(received[0], ('/base/message', 'test-token', {'title': 'Título', 'message': 'Oferta', 'priority': 5, 'extras': {'client::display': {'contentType': 'text/markdown'}}}))
+        self.assertEqual(received[0], ('/base/message', 'test-token', 'Mozilla/5.0 (compatible; MurkTelegot/1.0)', {'title': 'Título', 'message': 'Oferta', 'priority': 5, 'extras': {'client::display': {'contentType': 'text/markdown'}}}))
         self.assertIn('HTTP 302', send_gotify(url + '/redirect', 'test-token', 'Título', 'Oferta')[1])
         self.assertEqual(len(received), 2)
 
