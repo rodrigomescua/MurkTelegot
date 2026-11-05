@@ -54,7 +54,7 @@ Testes com dados temporários verificam operações atômicas, validação, limi
 
 ## Frequência e filtros
 
-Testes com dados temporários verificam que ofertas ignoradas e álbuns com partes ignoradas não entram nas frequências; palavras e expressões inteiras contidas em sugestões ocultas deixam de aparecer, com restauração e alertas preservados.
+Testes com dados temporários verificam que ofertas ignoradas e álbuns com partes ignoradas não entram nas frequências; palavras e expressões inteiras contidas em sugestões ocultas deixam de aparecer, com restauração e alertas preservados. A partir de 0.2.9, são excluídos termos numéricos e termos menores que o mínimo configurado (padrão/mínimo permitido 4); a inicialização apaga palavras ignoradas numéricas ou menores que quatro caracteres. 94 testes passaram. A tentativa de Chromium não iniciou porque o executável Snap disponível não funcionou com Playwright.
 
 ## Notificações Gotify
 
