@@ -1,4 +1,8 @@
 import json
+import socket
+import ssl
+import urllib.error
+from unittest.mock import Mock
 import os
 from pathlib import Path
 import tempfile
@@ -54,7 +58,7 @@ class GotifyTests(unittest.TestCase):
             self.assertNotIn('secret', rejected.headers['location'])
             self.assertEqual(self.store.gotify_settings()['url'], 'http://gotify/base')
             self.assertEqual(client.post('/settings/gotify/test', cookies=cookies).status_code, 403)
-            with patch('app.main.send_gotify', return_value=True) as send:
+            with patch('app.main.send_gotify', return_value=(True, '')) as send:
                 tested = client.post('/settings/gotify/test', cookies=cookies, follow_redirects=False, data={'csrf': main.csrf_token})
                 self.assertEqual(tested.status_code, 303)
                 send.assert_called_once()
@@ -126,6 +130,47 @@ class GotifyTests(unittest.TestCase):
         self.assertEqual(reopened.rows('SELECT * FROM offers'), before)
         self.assertEqual(reopened.gotify_settings(), {'url': '', 'token': '', 'enabled': False})
 
+    def test_failures_classified_without_leaking_server_details(self):
+        cases = [
+            (urllib.error.HTTPError('http://secret-test', 401, 'secret-test', {}, None), 'HTTP 401'),
+            (urllib.error.HTTPError('http://secret-test', 403, 'secret-test', {}, None), 'HTTP 403'),
+            (urllib.error.HTTPError('http://secret-test', 404, 'secret-test', {}, None), 'HTTP 404'),
+            (urllib.error.HTTPError('http://secret-test', 502, 'secret-test', {}, None), 'HTTP 502'),
+            (urllib.error.URLError(socket.gaierror(-2, 'secret-test')), 'DNS'),
+            (urllib.error.URLError(ConnectionRefusedError(111, 'secret-test')), 'recusada'),
+            (urllib.error.URLError(TimeoutError('secret-test')), 'esgotado'),
+            (urllib.error.URLError(ssl.SSLCertVerificationError('secret-test')), 'Certificado HTTPS'),
+            (urllib.error.URLError(ssl.SSLError('secret-test')), 'TLS'),
+            (urllib.error.URLError('secret-test'), 'Falha na comunicação'),
+        ]
+        for exc, expected in cases:
+            with self.subTest(expected=expected), patch('app.gotify.urllib.request.build_opener') as opener:
+                opener.return_value.open.side_effect = exc
+                ok, detail = send_gotify('https://host', 'secret-test', 'private-text', 'secret-test')
+                self.assertFalse(ok)
+                self.assertIn(expected, detail)
+                self.assertNotIn('secret-test', detail)
+                self.assertNotIn('private-text', detail)
+
+    def test_diagnostics_visible_persistently_and_logged_without_token(self):
+        self.store.save_gotify('http://gotify', 'secret-test', True)
+        with patch.object(main, 'store', self.store):
+            client = TestClient(main.app)
+            session = 'test-gotify-error'
+            main.sessions[session] = time.monotonic() + 60
+            self.addCleanup(main.sessions.pop, session, None)
+            cookies = {'panel_session': session}
+            with patch('app.main.send_gotify', return_value=(False, 'O servidor retornou HTTP 401. Confira o token.')):
+                with self.assertLogs('app.main', level='WARNING') as logs:
+                    response = client.post('/settings/gotify/test', cookies=cookies, follow_redirects=False,
+                                           data={'csrf': main.csrf_token})
+                page = client.get(response.headers['location'], cookies=cookies)
+                self.assertIn('HTTP 401', page.text)
+                self.assertIn('role="alert"', page.text)
+                self.assertNotIn('data-toast>Não foi possível', page.text)
+                self.assertIn('HTTP 401', '\n'.join(logs.output))
+                self.assertNotIn('secret-test', response.headers['location'] + page.text + '\n'.join(logs.output))
+
     def test_http_protocol_and_redirect_does_not_forward_token(self):
         received = []
         class Handler(BaseHTTPRequestHandler):
@@ -144,9 +189,9 @@ class GotifyTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         url = f'http://127.0.0.1:{server.server_port}'
-        self.assertTrue(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta'))
+        self.assertEqual(send_gotify(url + '/base', 'test-token', 'Título', 'Oferta'), (True, ''))
         self.assertEqual(received[0], ('/base/message', 'test-token', {'title': 'Título', 'message': 'Oferta', 'priority': 5, 'extras': {'client::display': {'contentType': 'text/markdown'}}}))
-        self.assertFalse(send_gotify(url + '/redirect', 'test-token', 'Título', 'Oferta'))
+        self.assertIn('HTTP 302', send_gotify(url + '/redirect', 'test-token', 'Título', 'Oferta')[1])
         self.assertEqual(len(received), 2)
 
 
@@ -163,7 +208,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
                 message = SimpleNamespace(id=mid, raw_text=body, date=datetime.now(timezone.utc),
                                           to_json=lambda: json.dumps({'grouped_id': group, 'entities': [{'_': 'MessageEntityBold', 'offset': 0, 'length': 8}]}))
                 return SimpleNamespace(chat_id=chat, message=message)
-            with patch('app.telegram.send_gotify', return_value=True) as send:
+            with patch('app.telegram.send_gotify', return_value=(True, '')) as send:
                 await telegram.receive(event(1, 'Notebook PS5', group=9))
                 await telegram.receive(event(1, 'Notebook PS5', group=9))
                 await telegram.receive(event(2, 'Notebook PS5', group=9))
@@ -189,7 +234,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
                                       grouped_id=None, to_json=lambda: '{}')
             telegram.client = SimpleNamespace(get_messages=AsyncMock(return_value=message))
             offer = store.rows('SELECT * FROM offers')[0]
-            with patch('app.telegram.send_gotify', return_value=True) as send:
+            with patch('app.telegram.send_gotify', return_value=(True, '')) as send:
                 await telegram.refresh(offer)
                 await telegram.refresh(offer)
                 send.assert_called_once()
@@ -204,10 +249,13 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
             def event(mid):
                 message = SimpleNamespace(id=mid, raw_text='Notebook', date=datetime.now(timezone.utc), to_json=lambda: '{}')
                 return SimpleNamespace(chat_id=1, message=message)
-            with patch('app.telegram.send_gotify', return_value=False) as send:
+            with patch('app.telegram.send_gotify', return_value=(False, 'Conexão recusada.')) as send:
                 await telegram.receive(event(1))
                 send.assert_not_called()
                 store.save_gotify('http://gotify', 'test-token', True)
-                await telegram.receive(event(2))
+                with self.assertLogs('app.telegram', level='WARNING') as logs:
+                    await telegram.receive(event(2))
+                self.assertIn('Conexão recusada.', logs.output[0])
+                self.assertNotIn('test-token', logs.output[0])
                 send.assert_called_once()
                 self.assertEqual(store.unread(), 2)

@@ -63,3 +63,7 @@ Testes com dados temporários e servidor HTTP local simulado verificam configura
 ## Formatação Gotify
 
 Testes com dados temporários verificam metadados Markdown no protocolo Gotify, entidades UTF-16, links seguros, texto escapado, código, citações, spoilers ocultos e indicação de mídia. A exibição em clientes Gotify reais não foi testada.
+
+## Diagnóstico Gotify
+
+Testes simulam respostas HTTP, falhas de DNS, timeout, conexão recusada e TLS, verificam detalhes na tela e no log e ausência de token e texto privado. Chromium com servidor local simulado verificou erro HTTP persistente e sigilo. A falha relatada em produção não foi reproduzida nem identificada neste ambiente.

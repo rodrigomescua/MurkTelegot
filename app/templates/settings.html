@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Configurações</h1>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
+{% if test_error %}<p class="notice error" role="alert">{{ test_error }}</p>{% endif %}
 <section aria-labelledby="gotify-title">
 <h2 id="gotify-title">Notificações Gotify</h2>
 <p>Receba uma notificação com o texto e o link da oferta quando ela gerar um novo alerta, inclusive se estiver oculta por palavras ignoradas.</p>

@@ -1,6 +1,9 @@
 import http.client
 import json
 import re
+import errno
+import socket
+import ssl
 from html import escape
 from html.parser import HTMLParser
 import urllib.error
@@ -107,6 +110,28 @@ def gotify_message(offer):
     return result.strip()
 
 
+def connection_error(reason):
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        code = getattr(reason, 'verify_code', None)
+        suffix = f' (código TLS {code})' if isinstance(code, int) else ''
+        return f'Certificado HTTPS inválido{suffix}. Confira o certificado e a cadeia de confiança.'
+    if isinstance(reason, ssl.SSLError):
+        return 'Falha na conexão TLS. Confira se o protocolo e a porta HTTPS estão corretos.'
+    if isinstance(reason, socket.gaierror):
+        code = f' (código {reason.errno})' if isinstance(reason.errno, int) else ''
+        return f'Falha de DNS{code}. Confira o nome do servidor e a rede do app.'
+    if isinstance(reason, TimeoutError):
+        return 'Tempo de conexão esgotado. Confira a rede e a disponibilidade do servidor.'
+    if isinstance(reason, ConnectionRefusedError):
+        return 'Conexão recusada. Confira o endereço, a porta e se o Gotify está acessível pelo app.'
+    if isinstance(reason, ConnectionResetError):
+        return 'Conexão encerrada pelo servidor. Confira o protocolo, a porta e o proxy.'
+    if isinstance(reason, OSError) and isinstance(reason.errno, int):
+        name = errno.errorcode.get(reason.errno, 'erro de rede')
+        return f'Falha de rede ({name}, código {reason.errno}). Confira a conectividade do app.'
+    return 'Falha na comunicação com o Gotify. Confira a URL e a conectividade do app.'
+
+
 def send_gotify(url, token, title, message):
     try:
         request = urllib.request.Request(url + '/message', data=json.dumps({
@@ -114,6 +139,22 @@ def send_gotify(url, token, title, message):
             'extras': {'client::display': {'contentType': 'text/markdown'}},
         }).encode(), headers={'Content-Type': 'application/json', 'X-Gotify-Key': token}, method='POST')
         with urllib.request.build_opener(NoRedirect()).open(request, timeout=5) as response:
-            return 200 <= response.status < 300
-    except (urllib.error.URLError, OSError, ValueError, UnicodeError, http.client.HTTPException):
-        return False
+            if 200 <= response.status < 300:
+                return True, ''
+            return False, f'O servidor retornou HTTP {response.status}.'
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            hint = 'Confira o token da aplicação e as permissões.'
+        elif exc.code == 404:
+            hint = 'Confira a URL base e o caminho do Gotify.'
+        elif 300 <= exc.code < 400:
+            hint = 'Redirecionamentos não são seguidos; use a URL final do Gotify.'
+        elif exc.code >= 500:
+            hint = 'Confira o servidor Gotify e o proxy reverso.'
+        else:
+            hint = 'Confira a URL e a configuração do servidor Gotify.'
+        return False, f'O servidor retornou HTTP {exc.code}. {hint}'
+    except urllib.error.URLError as exc:
+        return False, connection_error(exc.reason)
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        return False, connection_error(exc)

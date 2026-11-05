@@ -116,10 +116,10 @@ class Telegram:
             return
         content = gotify_message(alert)
         async with self.notification_slots:
-            sent = await asyncio.to_thread(send_gotify, config['url'], config['token'],
+            sent, detail = await asyncio.to_thread(send_gotify, config['url'], config['token'],
                                            'Novo alerta · ' + alert['chat'], content)
         if not sent:
-            log.warning('Falha ao enviar notificação Gotify; alerta mantido no painel')
+            log.warning('Falha ao enviar notificação Gotify: %s; alerta mantido no painel', detail)
 
     async def refresh(self, offer):
         if not await self.authorized():

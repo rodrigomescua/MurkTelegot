@@ -203,17 +203,17 @@ async def telegram_action(request: Request, action: str, phone: str = Form('', m
 
 
 @app.get('/settings', dependencies=[Depends(authenticate)])
-async def settings_page(request: Request, notice: str = ''):
+async def settings_page(request: Request, notice: str = '', test_error: str = ''):
     config = store.gotify_settings()
     return templates.TemplateResponse(request, 'settings.html', {
         'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
-        'token_configured': bool(config['token']), 'notice': notice,
+        'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
     })
 
 
-def settings_redirect(message):
+def settings_redirect(message, *, error=False):
     from urllib.parse import urlencode
-    return RedirectResponse('/settings?' + urlencode({'notice': message}), status_code=303)
+    return RedirectResponse('/settings?' + urlencode({'test_error' if error else 'notice': message}), status_code=303)
 
 
 @app.post('/settings/gotify', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -238,11 +238,13 @@ async def clear_gotify_settings():
 async def test_gotify_settings():
     config = store.gotify_settings()
     if not config['url'] or not config['token']:
-        return settings_redirect('Salve a URL e o token Gotify antes de testar.')
-    sent = await asyncio.to_thread(send_gotify, config['url'], config['token'],
-                                   'Teste · MurkTelegot', 'As notificações Gotify estão configuradas.')
-    return settings_redirect('Notificação de teste enviada.' if sent else
-                             'Não foi possível enviar o teste. Confira a URL, o token e a conexão.')
+        return settings_redirect('Salve a URL e o token Gotify antes de testar.', error=True)
+    sent, detail = await asyncio.to_thread(send_gotify, config['url'], config['token'],
+                                           'Teste · MurkTelegot', 'As notificações Gotify estão configuradas.')
+    if not sent:
+        logging.getLogger(__name__).warning('Teste Gotify falhou: %s', detail)
+        return settings_redirect('Não foi possível enviar o teste. ' + detail, error=True)
+    return settings_redirect('Notificação de teste enviada.')
 
 
 @app.get('/groups', dependencies=[Depends(authenticate)])
