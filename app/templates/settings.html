@@ -17,4 +17,15 @@
 <div class="toolbar"><form method="post" action="/settings/gotify/test"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Enviar teste com configuração salva</button></form>{% if token_configured or gotify_url %}<form method="post" action="/settings/gotify/clear" data-confirm="Remover a URL e o token Gotify salvos?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remover configuração</button></form>{% endif %}</div>
 <p class="field-help">O teste usa os dados já salvos. As notificações usam formatação compatível com o Gotify; spoilers ficam ocultos e mídias podem ser abertas no Telegram. Falhas não interrompem a coleta e não são reenviadas automaticamente.</p>
 </section>
+<section aria-labelledby="terms-settings-title">
+<h2 id="terms-settings-title">Termos frequentes</h2>
+<p>Termos formados apenas por números são sempre ignorados.</p>
+<form method="post" action="/settings/frequent-terms">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<label for="frequent-terms-min-chars">Quantidade mínima de caracteres</label>
+<input id="frequent-terms-min-chars" name="min_chars" type="number" min="4" max="100" value="{{ frequent_terms_min_chars }}" required>
+<p class="field-help">O mínimo permitido é 4 caracteres.</p>
+<button>Salvar configuração</button>
+</form>
+</section>
 {% endblock %}

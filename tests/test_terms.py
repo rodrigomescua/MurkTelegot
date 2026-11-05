@@ -34,9 +34,37 @@ class FrequentTermsTests(unittest.TestCase):
         counts = {normalize(term['word']): term['count'] for term in self.store.frequent_terms()}
         self.assertEqual(counts['preco baixo'], 3)
         self.assertEqual(counts['preco baixo ps5'], 2)
-        self.assertEqual(counts['ps5'], 2)
+        self.assertNotIn('ps5', counts)
         self.assertNotIn('https', counts)
         self.assertNotIn('de', counts)
+
+    def test_numeric_and_short_terms_are_filtered_with_configurable_minimum(self):
+        for number in (1, 2):
+            self.add(number, '123 1234 tiny small medium larger')
+        terms = {normalize(term['word']) for term in self.store.frequent_terms()}
+        self.assertNotIn('123', terms)
+        self.assertNotIn('1234', terms)
+        self.assertIn('small', terms)
+        self.store.save_frequent_terms_min_chars(6)
+        terms = {normalize(term['word']) for term in self.store.frequent_terms()}
+        self.assertNotIn('small', terms)
+        self.assertIn('medium', terms)
+        with self.assertRaises(ValueError):
+            self.store.add_ignored('small')
+        with self.assertRaises(ValueError):
+            self.store.hide_suggestion('1234')
+        with self.assertRaises(ValueError):
+            self.store.save_frequent_terms_min_chars(3)
+
+    def test_startup_removes_invalid_ignored_keywords(self):
+        self.store.execute("INSERT INTO ignored_keywords(word,normalized) VALUES('123','123')")
+        self.store.execute("INSERT INTO ignored_keywords(word,normalized) VALUES('abc','abc')")
+        self.store.execute("INSERT INTO ignored_keywords(word,normalized) VALUES('valid','valid')")
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.rows('SELECT word FROM ignored_keywords'), [{'word': 'valid'}])
+        self.assertTrue(reopened.add_ignored('abcd'))
+        with self.assertRaises(ValueError):
+            reopened.add_ignored('12345')
 
     def test_term_offer_lookup_matches_exact_normalized_phrases_and_pages_albums(self):
         self.add(1, 'Preço baixo! PS5 oferta', 10)
@@ -82,8 +110,8 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(reopened.unread(), 2)
         reopened.execute('DELETE FROM hidden_suggestions')
         self.assertIn('promoção', [term['word'] for term in reopened.frequent_terms()])
-        reopened.add_ignored('PS5')
-        self.assertNotIn('ps5', [term['word'] for term in reopened.frequent_terms()])
+        reopened.add_ignored('promoção')
+        self.assertNotIn('promoção', [term['word'] for term in reopened.frequent_terms()])
         self.assertEqual(len(reopened.feed()), 0)
         self.assertEqual(len(reopened.feed(alerts=True)), 2)
         self.assertEqual(reopened.unread(), 2)
@@ -111,22 +139,22 @@ class FrequentTermsTests(unittest.TestCase):
             hidden_id = self.store.rows('SELECT id FROM hidden_suggestions')[0]['id']
             self.assertTrue(client.post(f'/terms/restore/{hidden_id}', cookies=cookies, data={'csrf': main.csrf_token}, headers=headers).json()['ok'])
             self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
-            result = client.post('/terms/ignore', cookies=cookies, data={'csrf': main.csrf_token, 'word': 'PS5'}, follow_redirects=False)
+            result = client.post('/terms/ignore', cookies=cookies, data={'csrf': main.csrf_token, 'word': 'promoção'}, follow_redirects=False)
             self.assertEqual(result.status_code, 303)
             self.assertTrue(result.headers['location'].startswith('/terms?'))
             self.assertEqual(self.store.feed(), [])
             self.assertEqual(self.store.unread(), 2)
 
     def test_frequencies_exclude_ignored_offers_and_whole_albums(self):
-        self.add(1, 'Cafeteira PS5!')
-        self.add(2, 'Cafeteira (ps5)')
+        self.add(1, 'Cafeteira PS5 Slim!')
+        self.add(2, 'Cafeteira (ps5 slim)')
         self.add(3, 'Cafeteira de viagem', 42)
-        self.add(4, 'Oferta PS5', 42)
+        self.add(4, 'Oferta PS5 Slim', 42)
         self.add(5, 'Cafeteira doméstica')
         self.add(6, 'Cafeteira doméstica')
         self.add(7, 'Cafeteira PS5pro')
         self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 6)
-        self.store.add_ignored('PS5')
+        self.store.add_ignored('PS5 Slim')
         terms = {normalize(t['word']): t['count'] for t in self.store.frequent_terms()}
         self.assertEqual(terms['cafeteira'], 3)
         self.assertEqual(len(self.store.feed()), 3)
@@ -164,7 +192,7 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(self.store.add_terms_batch('hide', ['promoção', 'PROMOCAO', 'preço baixo']), 2)
         self.assertEqual(len(self.store.feed()), 2)
         self.assertEqual(self.store.unread(), 2)
-        self.assertEqual(self.store.add_terms_batch('ignore', ['PS5', 'outro']), 2)
+        self.assertEqual(self.store.add_terms_batch('ignore', ['ps5 promoção', 'outro']), 2)
         self.assertEqual(self.store.feed(), [])
         self.assertEqual(self.store.unread(), 2)
         with self.assertRaises(ValueError):
@@ -185,12 +213,12 @@ class FrequentTermsTests(unittest.TestCase):
             empty = client.post('/terms/batch', cookies=cookies, headers=headers, data={'csrf': main.csrf_token, 'action': 'hide'})
             self.assertEqual(empty.status_code, 400)
             self.assertIn('Selecione', empty.json()['message'])
-            saved = client.post('/terms/batch', cookies=cookies, headers=headers, data={'csrf': main.csrf_token, 'action': 'hide', 'words': ['PS5', 'promoção']})
+            saved = client.post('/terms/batch', cookies=cookies, headers=headers, data={'csrf': main.csrf_token, 'action': 'hide', 'words': ['PS5 Slim', 'promoção']})
             self.assertEqual(saved.status_code, 200)
             self.assertIn('2 termos adicionados', saved.json()['message'])
             self.assertEqual(len(self.store.rows('SELECT * FROM hidden_suggestions')), 2)
             fallback = client.post('/terms/batch', cookies=cookies, follow_redirects=False,
-                data={'csrf': main.csrf_token, 'action': 'ignore', 'words': ['PS5', 'promoção'], 'page': '2'})
+                data={'csrf': main.csrf_token, 'action': 'ignore', 'words': ['PS5 Slim', 'promoção'], 'page': '2'})
             self.assertEqual(fallback.status_code, 303)
             self.assertIn('page=2', fallback.headers['location'])
             self.assertEqual(len(self.store.rows('SELECT * FROM ignored_keywords')), 2)
@@ -225,6 +253,25 @@ class FrequentTermsTests(unittest.TestCase):
             self.assertEqual(client.get('/terms/offers?word=', cookies=cookies).status_code, 400)
             response = client.get('/terms/offers?word=promo%C3%A7%C3%A3o', cookies=cookies)
             self.assertEqual(response.status_code, 200)
+
+    def test_minimum_setting_requires_csrf_and_rejects_values_below_four(self):
+        with patch.object(main, 'store', self.store):
+            client = TestClient(main.app)
+            token = 'test-minimum-setting-session'
+            main.sessions[token] = time.monotonic() + 60
+            self.addCleanup(main.sessions.pop, token, None)
+            cookies = {'panel_session': token}
+            self.assertEqual(client.get('/settings', cookies=cookies).status_code, 200)
+            self.assertEqual(client.post('/settings/frequent-terms', cookies=cookies,
+                data={'min_chars': '6'}).status_code, 403)
+            response = client.post('/settings/frequent-terms', cookies=cookies,
+                data={'csrf': main.csrf_token, 'min_chars': '6'}, follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(self.store.frequent_terms_min_chars(), 6)
+            response = client.post('/settings/frequent-terms', cookies=cookies,
+                data={'csrf': main.csrf_token, 'min_chars': '3'}, follow_redirects=False)
+            self.assertIn('test_error=', response.headers['location'])
+            self.assertEqual(self.store.frequent_terms_min_chars(), 6)
 
 
 if __name__ == '__main__':

@@ -250,7 +250,17 @@ async def settings_page(request: Request, notice: str = '', test_error: str = ''
     return templates.TemplateResponse(request, 'settings.html', {
         'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
         'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
+        'frequent_terms_min_chars': store.frequent_terms_min_chars(),
     })
+
+
+@app.post('/settings/frequent-terms', dependencies=[Depends(authenticate), Depends(csrf)])
+async def save_frequent_terms_settings(min_chars: int = Form(...)):
+    try:
+        store.save_frequent_terms_min_chars(min_chars)
+    except ValueError as exc:
+        return settings_redirect(str(exc), error=True)
+    return settings_redirect('Quantidade mínima dos termos frequentes salva.')
 
 
 def settings_redirect(message, *, error=False):

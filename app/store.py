@@ -99,6 +99,8 @@ class Store:
                 for name in ('source_json', 'grouped_id'):
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
+            db.execute('''DELETE FROM ignored_keywords
+                          WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
 
@@ -184,6 +186,9 @@ class Store:
         normalized = normalize(word).strip()
         if not normalized:
             raise ValueError('Informe uma palavra ou expressão para ignorar.')
+        minimum = self.frequent_terms_min_chars()
+        if len(normalized) < minimum or normalized.isdigit():
+            raise ValueError(f'Use pelo menos {minimum} caracteres e não informe apenas números.')
         with self.connect() as db:
             return db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
                               (word, normalized)).rowcount == 1
@@ -198,6 +203,7 @@ class Store:
             db.execute('BEGIN')
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
+            minimum = self.frequent_terms_min_chars()
             rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY chat_id,grouped_id,id').fetchall()
         hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
         for parts in offer_term_groups(rows, ignored):
@@ -205,7 +211,8 @@ class Store:
             for part in parts:
                 for word, first, last in offer_body_terms(part['body']):
                     normalized = normalize(word)
-                    if (len(word) <= 100 and len(normalized) > 1 and
+                    if (len(word) <= 100 and len(normalized) >= minimum and
+                        not normalized.isdigit() and
                         normalize(first) not in stopwords and normalize(last) not in stopwords and
                         normalized not in hidden_terms):
                         terms.setdefault(normalized, word)
@@ -243,8 +250,8 @@ class Store:
     def hide_suggestion(self, word):
         word = word.strip()
         normalized = normalize(word).strip()
-        if not normalized:
-            raise ValueError('Informe um termo para ocultar.')
+        if not self.valid_frequent_term(word, 2):
+            raise ValueError('Informe um termo válido para ocultar.')
         with self.connect() as db:
             return db.execute('INSERT OR IGNORE INTO hidden_suggestions(word,normalized) VALUES(?,?)',
                               (word, normalized)).rowcount == 1
@@ -255,13 +262,31 @@ class Store:
         if not words or len(words) > 50:
             raise ValueError('Selecione entre 1 e 50 termos desta página.')
         items = [(word.strip(), normalize(word.strip()).strip()) for word in words]
-        if any(not normalized or len(word) > 100 for word, normalized in items):
-            raise ValueError('Os termos devem conter até 100 caracteres e não podem estar vazios.')
+        minimum = self.frequent_terms_min_chars() if action == 'ignore' else 2
+        if any((not normalize(word).strip() if action == 'ignore' else not self.valid_frequent_term(word, minimum)) or len(word) > 100 for word, _ in items):
+            raise ValueError(f'Os termos devem ter pelo menos {minimum} caracteres, não ser apenas numéricos e conter até 100 caracteres.')
         table = 'ignored_keywords' if action == 'ignore' else 'hidden_suggestions'
         with self.connect() as db:
             before = db.total_changes
             db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items)
             return db.total_changes - before
+
+    @staticmethod
+    def valid_frequent_term(word, minimum=4):
+        word = word.strip()
+        normalized = normalize(word)
+        return len(normalized) >= minimum and not word.isdigit() and bool(normalized.strip())
+
+    def frequent_terms_min_chars(self):
+        rows = self.rows("SELECT value FROM settings WHERE key='frequent_terms_min_chars'")
+        return max(4, int(rows[0]['value'])) if rows else 4
+
+    def save_frequent_terms_min_chars(self, value):
+        value = int(value)
+        if value < 4 or value > 100:
+            raise ValueError('A quantidade mínima deve estar entre 4 e 100 caracteres.')
+        with self.connect() as db:
+            db.execute("INSERT INTO settings(key,value) VALUES('frequent_terms_min_chars',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(value),))
 
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None, report_alert=False):
         grouped = json.loads(source_json).get('grouped_id') if source_json else None

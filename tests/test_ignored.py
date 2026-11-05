@@ -39,12 +39,12 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertFalse(matches('PS5_pro', 'PS5'))
 
     def test_ignore_applies_to_existing_and_new_offers_but_not_alerts(self):
-        self.add_offer(1, 'Notebook e PS5!')
+        self.add_offer(1, 'Notebook e PS5 Slim!')
         self.assertEqual(self.store.unread(), 1)
-        self.assertTrue(self.store.add_ignored(' PS5 '))
-        self.assertFalse(self.store.add_ignored('ps5'))
-        self.add_offer(2, 'Notebook com ps5, promoção')
-        self.add_offer(3, 'Notebook para PS5pro')
+        self.assertTrue(self.store.add_ignored(' PS5 Slim '))
+        self.assertFalse(self.store.add_ignored('ps5 slim'))
+        self.add_offer(2, 'Notebook com ps5 slim, promoção')
+        self.add_offer(3, 'Notebook para PS5pro item')
         self.assertEqual([o['message_id'] for o in self.store.feed()], [3])
         self.assertEqual({o['message_id'] for o in self.store.feed(alerts=True)}, {1, 2, 3})
         self.assertEqual(self.store.unread(), 3)
@@ -54,9 +54,9 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.unread(), 3)
 
     def test_ignore_album_if_any_part_matches_but_keep_alert_and_other_chat(self):
-        self.store.add_ignored('PS5')
+        self.store.add_ignored('PS5 Slim')
         self.add_offer(1, 'Notebook', grouped=55)
-        self.add_offer(2, 'Acompanha PS5.', grouped=55)
+        self.add_offer(2, 'Acompanha PS5 Slim.', grouped=55)
         self.store.execute('INSERT INTO chats VALUES(-100456,?)', ('Outro',))
         self.store.ingest(-100456, 1, 'Notebook normal', '2026-11-04', None,
                           source_json=json.dumps({'grouped_id': 55}))
@@ -69,10 +69,10 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.unread(), 1)
 
     def test_filter_before_limit_keeps_older_visible_items(self):
-        self.store.add_ignored('PS5')
+        self.store.add_ignored('PS5 Slim')
         self.add_offer(1, 'Oferta visível')
         for i in range(2, 112):
-            self.add_offer(i, 'PS5 em promoção')
+            self.add_offer(i, 'PS5 Slim em promoção')
         self.assertEqual([o['message_id'] for o in self.store.feed()], [1])
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 111)
 
@@ -95,11 +95,11 @@ class IgnoredWordsTests(unittest.TestCase):
     def test_new_offers_respect_filters_and_count_albums_once(self):
         self.add_offer(1, 'Notebook antigo', grouped=11)
         marker = self.store.rows('SELECT max(id) AS id FROM offers')[0]['id']
-        self.store.add_ignored('PS5')
+        self.store.add_ignored('PS5 Slim')
         self.add_offer(2, 'Notebook parte antiga', grouped=11)
         self.add_offer(3, 'Notebook novo', grouped=12)
         self.add_offer(4, 'Outra parte', grouped=12)
-        self.add_offer(5, 'Notebook PS5')
+        self.add_offer(5, 'Notebook PS5 Slim')
         self.add_offer(6, 'Oferta diferente')
         self.assertEqual(self.store.new_offers(marker), 2)
         self.assertEqual(self.store.new_offers(marker, 'Notebook'), 1)
@@ -140,7 +140,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
         self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
-        self.store.ingest(-100123, 1, 'Notebook e PS5!', '2026-11-04', None)
+        self.store.ingest(-100123, 1, 'Notebook e PS5 Slim!', '2026-11-04', None)
         self.patch = patch.object(main, 'store', self.store)
         self.patch.start()
         self.addCleanup(self.patch.stop)
@@ -159,17 +159,17 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.assertNotIn('id="ignored-settings"', page.text)
         self.assertIn('id="ignored-settings"', self.client.get('/ignored', cookies=self.auth).text)
         self.assertIn('Palavras ignoradas', page.text)
-        self.assertEqual(self.client.post('/ignored', data={'word': 'PS5'}, follow_redirects=False).status_code, 303)
-        self.assertEqual(self.client.post('/ignored', cookies=self.auth, data={'word': 'PS5'}).status_code, 403)
-        data = {'word': 'PS5', 'csrf': main.csrf_token, 'q': 'Notebook', 'alerts': 'false'}
+        self.assertEqual(self.client.post('/ignored', data={'word': 'PS5 Slim'}, follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post('/ignored', cookies=self.auth, data={'word': 'PS5 Slim'}).status_code, 403)
+        data = {'word': 'PS5 Slim', 'csrf': main.csrf_token, 'q': 'Notebook', 'alerts': 'false'}
         response = self.client.post('/ignored', cookies=self.auth, data=data, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
         self.assertNotIn('class="offer-card"', self.client.get('/', cookies=self.auth).text)
         alerts = self.client.get('/?alerts=true', cookies=self.auth)
-        self.assertIn('Notebook e PS5!', alerts.text)
+        self.assertIn('Notebook e PS5 Slim!', alerts.text)
         self.assertIn('Novo alerta', alerts.text)
-        duplicate = self.client.post('/ignored', cookies=self.auth, data={**data, 'word': 'ps5'}, headers={'Accept': 'application/json'})
+        duplicate = self.client.post('/ignored', cookies=self.auth, data={**data, 'word': 'ps5 slim'}, headers={'Accept': 'application/json'})
         self.assertEqual(duplicate.status_code, 400)
         self.assertIn('já está no filtro', duplicate.json()['message'])
         response = self.client.post('/ignored/1/delete', cookies=self.auth,
@@ -177,7 +177,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
                                     follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
-        self.assertIn('Notebook e PS5!', self.client.get('/', cookies=self.auth).text)
+        self.assertIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.store.unread(), 1)
 
     def test_invalid_and_html_words_are_handled_safely(self):

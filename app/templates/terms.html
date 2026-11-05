@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Termos frequentes</h1>
+<p>Termos formados apenas por números são ignorados. A quantidade mínima é configurável em <a href="/settings">Configurações</a> e não pode ser menor que 4 caracteres.</p>
 <p>Veja palavras e expressões de até três palavras presentes em pelo menos duas ofertas salvas. Cada oferta conta uma vez por termo, mesmo se houver repetição. A análise considera apenas ofertas visíveis na listagem principal; uma oferta é excluída se qualquer uma de suas mensagens contiver uma palavra ignorada.</p>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
 <div id="terms-content" data-page="{{ page }}">

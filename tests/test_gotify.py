@@ -269,7 +269,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
             store = Store(Path(directory) / 'db.sqlite')
             store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
             store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
-            store.add_ignored('PS5')
+            store.add_ignored('PS5 Slim')
             store.save_gotify('http://gotify', 'test-token', True)
             telegram = Telegram(store, Path(directory), None, None)
             def event(mid, body, group=None, chat=1):
@@ -277,14 +277,14 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
                                           to_json=lambda: json.dumps({'grouped_id': group, 'entities': [{'_': 'MessageEntityBold', 'offset': 0, 'length': 8}]}))
                 return SimpleNamespace(chat_id=chat, message=message)
             with patch('app.telegram.send_gotify', return_value=(True, '')) as send:
-                await telegram.receive(event(1, 'Notebook PS5', group=9))
-                await telegram.receive(event(1, 'Notebook PS5', group=9))
-                await telegram.receive(event(2, 'Notebook PS5', group=9))
+                await telegram.receive(event(1, 'Notebook PS5 Slim', group=9))
+                await telegram.receive(event(1, 'Notebook PS5 Slim', group=9))
+                await telegram.receive(event(2, 'Notebook PS5 Slim', group=9))
                 await telegram.receive(event(3, 'Outros produtos'))
                 await telegram.receive(event(3, 'Notebook editado'))
                 await telegram.receive(event(4, 'Notebook', chat=999))
                 self.assertEqual(send.call_count, 2)
-                self.assertIn('**Notebook** PS5', send.call_args_list[0].args[3])
+                self.assertIn('**Notebook** PS5 Slim', send.call_args_list[0].args[3])
                 self.assertEqual(len(store.feed()), 1)
                 self.assertEqual(store.unread(), 2)
 
