@@ -98,6 +98,30 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(len(last_page), 5)
         self.assertEqual(len(album_page[0]['parts']), 2)
 
+    def test_logically_deleted_offers_and_albums_are_excluded_from_terms(self):
+        self.add(1, 'Cafeteira elétrica')
+        self.add(2, 'Cafeteira elétrica')
+        self.add(3, 'Cafeteira elétrica')
+        self.add(4, 'Cafeteira elétrica', 40)
+        self.add(5, 'Cafeteira elétrica', 40)
+
+        count = lambda: next(term['count'] for term in self.store.frequent_terms()
+                             if normalize(term['word']) == normalize('cafeteira elétrica'))
+        self.assertEqual(count(), 4)
+        self.assertEqual(self.store.term_offers('cafeteira elétrica')[1], 4)
+
+        self.store.delete_offer(self.store.rows('SELECT id FROM offers WHERE message_id=1')[0]['id'])
+        self.assertEqual(count(), 3)
+        self.assertEqual(self.store.term_offers('cafeteira elétrica')[1], 3)
+
+        album_id = self.store.rows('SELECT id FROM offers WHERE message_id=4')[0]['id']
+        self.store.delete_offer(album_id)
+        self.assertEqual(count(), 2)
+        cards, total = self.store.term_offers('cafeteira elétrica')
+        self.assertEqual(total, 2)
+        visible_ids = {part['message_id'] for card in cards for part in card['parts']}
+        self.assertEqual(visible_ids, {2, 3})
+
     def test_persistent_hidden_suggestions_do_not_change_offers_or_alerts(self):
         self.add(1, 'PS5 promoção')
         self.add(2, 'ps5 promocao')

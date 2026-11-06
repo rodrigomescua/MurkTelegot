@@ -88,7 +88,7 @@ class Store:
                     id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
                     chat_title TEXT NOT NULL, body TEXT NOT NULL, url TEXT,
                     date TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
-                    source_json TEXT, grouped_id TEXT,
+                    source_json TEXT, grouped_id TEXT, deleted_at TEXT,
                     UNIQUE(chat_id, message_id));
                 CREATE TABLE IF NOT EXISTS hits (
                     offer_id INTEGER NOT NULL REFERENCES offers(id),
@@ -116,13 +116,14 @@ class Store:
             ''')
             if columns:
                 db.execute('BEGIN')
-                for name in ('source_json', 'grouped_id'):
+                for name in ('source_json', 'grouped_id', 'deleted_at'):
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
             db.execute('''DELETE FROM ignored_keywords
                           WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
+            db.execute('CREATE INDEX IF NOT EXISTS offers_deleted ON offers(deleted_at) WHERE deleted_at IS NOT NULL')
 
     @contextmanager
     def connect(self):
@@ -450,7 +451,7 @@ class Store:
         with self.connect() as db:
             rule_id = db.execute('INSERT INTO rules(name, keywords) VALUES(?,?)',
                                  (name, keywords)).lastrowid
-            matched = [row['id'] for row in db.execute('SELECT id,body FROM offers')
+            matched = [row['id'] for row in db.execute('SELECT id,body FROM offers WHERE deleted_at IS NULL')
                        if matches(row['body'], keywords)]
             db.executemany('INSERT INTO hits(offer_id,rule_id) VALUES(?,?)',
                            [(offer_id, rule_id) for offer_id in matched])
@@ -459,7 +460,7 @@ class Store:
                 if not matched:
                     return 0, []
                 offers = [dict(row) for row in db.execute(
-                    'SELECT * FROM offers WHERE id IN (' + ','.join('?' for _ in matched) + ') ORDER BY id', matched)]
+                    'SELECT * FROM offers WHERE deleted_at IS NULL AND id IN (' + ','.join('?' for _ in matched) + ') ORDER BY id', matched)]
                 notifications, notified_groups = [], set()
                 for row in offers:
                     group = ((row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None
@@ -521,7 +522,7 @@ class Store:
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
             minimum = self.frequent_terms_min_chars()
-            rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY chat_id,grouped_id,id').fetchall()
+            rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers WHERE deleted_at IS NULL ORDER BY chat_id,grouped_id,id').fetchall()
         hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
         for parts in offer_term_groups(rows, ignored):
             terms = {}
@@ -549,7 +550,7 @@ class Store:
                 '''SELECT o.*,
                     (SELECT group_concat(r.name, ', ') FROM hits h JOIN rules r ON r.id=h.rule_id
                      WHERE h.offer_id=o.id) AS rules
-                   FROM offers o ORDER BY o.date DESC,o.id DESC''')]
+                   FROM offers o WHERE o.deleted_at IS NULL ORDER BY o.date DESC,o.id DESC''')]
         matching = [parts for parts in offer_term_groups(rows, ignored)
                     if any(normalize(phrase) == normalized
                            for part in parts for phrase, _, _ in offer_body_terms(part['body']))]
@@ -614,7 +615,7 @@ class Store:
             chat = db.execute('SELECT title FROM chats WHERE id=?', (chat_id,)).fetchone()
             if not chat or (not body and not source_json):
                 return
-            previous = db.execute('SELECT id,body,grouped_id FROM offers WHERE chat_id=? AND message_id=?',
+            previous = db.execute('SELECT id,body,grouped_id,deleted_at FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()
             had_alert = False
             if report_alert:
@@ -631,6 +632,14 @@ class Store:
             offer_id = db.execute('SELECT id FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()['id']
             current_group = str(grouped) if grouped is not None else None
+            deleted_at = previous['deleted_at'] if previous else None
+            if current_group is not None:
+                deleted_at = deleted_at or db.execute('''SELECT min(deleted_at) FROM offers
+                    WHERE chat_id=? AND grouped_id=? AND deleted_at IS NOT NULL''',
+                    (chat_id, current_group)).fetchone()[0]
+                if deleted_at:
+                    db.execute('UPDATE offers SET deleted_at=coalesce(deleted_at,?) WHERE id=?',
+                               (deleted_at, offer_id))
             if ((previous and (previous['body'] != (body or '') or previous['grouped_id'] != current_group))
                     or (not previous and current_group is not None)):
                 affected = set()
@@ -649,26 +658,33 @@ class Store:
                 return offer_id, {'offer_id': offer_id, 'chat_id': chat_id, 'message_id': message_id,
                                   'grouped_id': str(grouped) if grouped is not None else None, 'source': 'telegram',
                                   'chat': chat['title'], 'body': body or '', 'url': url, 'source_json': source_json,
-                                  'rules': matched} if matched and not had_alert else None
+                                  'rules': matched} if matched and not had_alert and not deleted_at else None
             return offer_id
 
     def expire_offers(self, now=None):
         now = now or datetime.now(timezone.utc)
+        deleted_before = (now - timedelta(hours=1)).isoformat()
         short = (now - timedelta(hours=4)).isoformat()
         long = (now - timedelta(hours=24)).isoformat()
         with self.connect() as db:
             self._register_ignored_filter(db)
+            expired = [row[0] for row in db.execute('SELECT id FROM offers WHERE deleted_at IS NOT NULL AND deleted_at<=?',
+                                                    (deleted_before,))]
+            if expired:
+                db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in expired])
+                db.executemany('DELETE FROM offers WHERE id=?', [(offer_id,) for offer_id in expired])
             db.execute('''WITH
                 groups AS MATERIALIZED (
                     SELECT chat_id,coalesce(grouped_id,'message-' || id) AS group_id,
                            max(julianday(date)) AS latest
-                    FROM offers GROUP BY chat_id,coalesce(grouped_id,'message-' || id)),
+                    FROM offers WHERE deleted_at IS NULL
+                    GROUP BY chat_id,coalesce(grouped_id,'message-' || id)),
                 alerted AS MATERIALIZED (
                     SELECT DISTINCT o.chat_id,coalesce(o.grouped_id,'message-' || o.id) AS group_id
                     FROM offers o JOIN hits h ON h.offer_id=o.id),
                 ignored AS MATERIALIZED (
                     SELECT DISTINCT o.chat_id,coalesce(o.grouped_id,'message-' || o.id) AS group_id
-                    FROM offers o WHERE ignored_offer(o.body))
+                    FROM offers o WHERE o.deleted_at IS NULL AND ignored_offer(o.body))
                 DELETE FROM offers WHERE (chat_id,coalesce(grouped_id,'message-' || id)) IN (
                     SELECT g.chat_id,g.group_id FROM groups g
                     LEFT JOIN alerted a USING(chat_id,group_id)
@@ -683,13 +699,26 @@ class Store:
                 (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''', (offer_id, offer_id))]
             if not ids:
                 return False
-            db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in ids])
-            db.execute('''DELETE FROM offers WHERE id=? OR (chat_id,grouped_id) IN
-                (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''', (offer_id, offer_id))
+            deleted_at = datetime.now(timezone.utc).isoformat()
+            db.executemany('UPDATE offers SET deleted_at=coalesce(deleted_at,?) WHERE id=?',
+                           [(deleted_at, item) for item in ids])
+            return True
+
+    def restore_deleted_offer(self, offer_id):
+        with self.connect() as db:
+            row = db.execute('SELECT chat_id,grouped_id FROM offers WHERE id=? AND deleted_at IS NOT NULL',
+                             (offer_id,)).fetchone()
+            if not row:
+                return False
+            if row['grouped_id'] is None:
+                db.execute('UPDATE offers SET deleted_at=NULL WHERE id=?', (offer_id,))
+            else:
+                db.execute('UPDATE offers SET deleted_at=NULL WHERE chat_id=? AND grouped_id=?',
+                           (row['chat_id'], row['grouped_id']))
             return True
 
     def feed_filter(self, q='', alerts=False):
-        clauses, args = [], []
+        clauses, args = ['o.deleted_at IS NULL'], []
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
         else:
@@ -722,7 +751,7 @@ class Store:
         albums = {}
         if keys:
             members = [dict(row) for row in db.execute(select + 'WHERE ' + ' OR '.join('(chat_id=? AND grouped_id=?)' for _ in keys)
-                                + ' ORDER BY message_id', [value for key in keys for value in key])]
+                                + ' AND deleted_at IS NULL ORDER BY message_id', [value for key in keys for value in key])]
             for member in members:
                 albums.setdefault((member['chat_id'], member['grouped_id']), []).append(member)
         cards, added = [], set()
@@ -768,11 +797,17 @@ class Store:
     def unread(self):
         return self.rows('''SELECT count(*) AS n FROM (
             SELECT chat_id,coalesce(grouped_id,'message-' || id) FROM offers
-            WHERE seen=0 AND EXISTS(SELECT 1 FROM hits WHERE offer_id=offers.id)
+            WHERE deleted_at IS NULL AND seen=0 AND EXISTS(SELECT 1 FROM hits WHERE offer_id=offers.id)
             GROUP BY chat_id,coalesce(grouped_id,'message-' || id))''')[0]['n']
 
     def mark_seen(self, offer_id):
         with self.connect() as db:
             db.execute('''UPDATE offers SET seen=1 WHERE id=? OR
+                (chat_id,grouped_id) IN (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''',
+                       (offer_id, offer_id))
+
+    def mark_unseen(self, offer_id):
+        with self.connect() as db:
+            db.execute('''UPDATE offers SET seen=0 WHERE id=? OR
                 (chat_id,grouped_id) IN (SELECT chat_id,grouped_id FROM offers WHERE id=? AND grouped_id IS NOT NULL)''',
                        (offer_id, offer_id))

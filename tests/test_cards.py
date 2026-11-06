@@ -60,7 +60,7 @@ class OfferCardTests(unittest.TestCase):
         self.assertNotIn('Terceira linha', summary)
         self.assertIn('Terceira linha', response.text)
         self.assertIn('2 mensagens', summary)
-        self.assertIn('data-confirm="Excluir definitivamente esta oferta', response.text)
+        self.assertIn('data-delete-offer', response.text)
         self.assertIn('Abrir no Telegram', response.text)
         self.assertIn('offer-card-actions', response.text)
         self.assertIn('Excluir', response.text)

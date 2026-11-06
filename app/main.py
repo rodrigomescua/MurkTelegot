@@ -627,20 +627,35 @@ def restore_term(request: Request, term_id: int, page: int = Form(1)):
 async def seen(request: Request, offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
     store.mark_seen(offer_id)
     if 'application/json' in request.headers.get('accept', ''):
-        return {'ok': True, 'message': 'Alerta marcado como lido.'}
+        return {'ok': True, 'message': 'Alerta marcado como lido.', 'unread': store.unread()}
     return redirect('Alerta marcado como lido.', q=q, alerts=alerts)
 
 
+@app.post('/offers/{offer_id}/seen/undo', dependencies=[Depends(authenticate), Depends(csrf)])
+async def undo_seen(offer_id: int):
+    store.mark_unseen(offer_id)
+    return {'ok': True, 'message': 'Alerta voltou para não lido.', 'unread': store.unread()}
+
+
 @app.post('/offers/{offer_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
-async def delete_offer(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
+async def delete_offer(request: Request, offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
     if not store.delete_offer(offer_id):
         raise HTTPException(404, 'Alerta não encontrado.')
+    if 'application/json' in request.headers.get('accept', ''):
+        return {'ok': True, 'message': 'Oferta excluída.', 'unread': store.unread()}
     return redirect('Oferta removida.', q=q, alerts=alerts)
+
+
+@app.post('/offers/{offer_id}/delete/undo', dependencies=[Depends(authenticate), Depends(csrf)])
+async def undo_delete_offer(offer_id: int):
+    if not store.restore_deleted_offer(offer_id):
+        raise HTTPException(404, 'Oferta não encontrada ou exclusão já finalizada.')
+    return {'ok': True, 'message': 'Oferta restaurada.', 'unread': store.unread()}
 
 
 @app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])
 async def offer_media(offer_id: int, thumbnail: bool = False):
-    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    rows = store.rows('SELECT * FROM offers WHERE id=? AND deleted_at IS NULL', (offer_id,))
     if not rows:
         raise HTTPException(404, 'Oferta não encontrada.')
     offer = rows[0]
@@ -661,7 +676,7 @@ async def offer_media(offer_id: int, thumbnail: bool = False):
 
 @app.get('/public-media/{offer_id}/{expiry}/{signature}')
 async def signed_offer_media(offer_id: int, expiry: int, signature: str):
-    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    rows = store.rows('SELECT * FROM offers WHERE id=? AND deleted_at IS NULL', (offer_id,))
     if not rows or expiry <= int(time.time()) or expiry > int(time.time()) + 24 * 60 * 60:
         raise HTTPException(404)
     offer = rows[0]
@@ -683,7 +698,7 @@ async def signed_offer_media(offer_id: int, expiry: int, signature: str):
 
 @app.post('/offers/{offer_id}/refresh', dependencies=[Depends(authenticate), Depends(csrf)])
 async def refresh_offer(offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
-    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
+    rows = store.rows('SELECT * FROM offers WHERE id=? AND deleted_at IS NULL', (offer_id,))
     if not rows:
         raise HTTPException(404, 'Oferta não encontrada.')
     try:

@@ -180,6 +180,55 @@ offerModal.addEventListener('close', () => {
 });
 
 const termsPage = document.querySelector('#terms-content');
+async function handleOfferCardSubmit(event) {
+  const form = event.target;
+  const action = form.matches('[data-mark-seen]') ? 'seen' : form.matches('[data-delete-offer]') ? 'delete' : null;
+  const undo = form.matches('[data-card-undo]');
+  if (!action && !undo) return;
+  event.preventDefault();
+  if (form.dataset.busy) return;
+  form.dataset.busy = 'true';
+  const button = event.submitter || form.querySelector('button');
+  button.disabled = true;
+  const card = form.closest('.offer-card');
+  const overlay = card.querySelector('.offer-action-overlay');
+  try {
+    const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível atualizar o alerta. Tente novamente.');
+    const counter = document.querySelector('#alert-counter strong');
+    if (counter && Number.isFinite(result.unread)) counter.textContent = result.unread;
+    const detail = card.querySelector('.offer-detail');
+    const actions = card.querySelector('.offer-card-actions');
+    if (undo) {
+      card.classList.remove('offer-card-actioned');
+      detail.inert = false;
+      actions.inert = false;
+      overlay.hidden = true;
+      overlay.querySelector('strong').textContent = '';
+      card.querySelector('.offer-summary')?.focus({preventScroll: true});
+    } else {
+      const undoForm = overlay.querySelector('[data-card-undo]');
+      undoForm.action = `${form.action}/undo`;
+      detail.inert = true;
+      actions.inert = true;
+      card.classList.add('offer-card-actioned');
+      overlay.querySelector('strong').textContent = action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.';
+      overlay.hidden = false;
+      undoForm.querySelector('button').focus({preventScroll: true});
+    }
+  } catch (error) {
+    const message = error.message || 'Não foi possível confirmar a operação. Tente novamente.';
+    const termStatus = document.querySelector('.term-offers-modal .term-offers-status');
+    if (termStatus && card.closest('.term-offers-body')) {
+      termStatus.hidden = false;
+      termStatus.textContent = message;
+    } else toast(message, true);
+  } finally {
+    delete form.dataset.busy;
+    button.disabled = false;
+  }
+}
 if (termsPage) {
   termOffersDialog = document.createElement('dialog');
   termOffersDialog.className = 'offer-modal term-offers-modal';
@@ -192,7 +241,6 @@ if (termsPage) {
   let termTrigger;
   let termRequest = 0;
   let termCurrentUrl;
-  let termActionBusy = false;
   termOffersDialog.querySelector('.term-offers-close').addEventListener('click', () => termOffersDialog.close());
   termOffersDialog.addEventListener('close', () => {
     if (!termOffersReturn) {
@@ -252,33 +300,7 @@ if (termsPage) {
     loadTermOffers(link.href);
     termOffersDialog.querySelector('.modal-heading').scrollIntoView({block: 'nearest'});
   });
-  termBody.addEventListener('submit', async (event) => {
-    const form = event.target;
-    if (!form.matches('[data-mark-seen]')) return;
-    event.preventDefault();
-    if (termActionBusy) return;
-    termActionBusy = true;
-    const button = event.submitter || form.querySelector('button');
-    const cardId = form.closest('.offer-card').id;
-    button.disabled = true;
-    let saved = false;
-    try {
-      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível confirmar a leitura. Atualize a lista para conferir.');
-      saved = true;
-      const refreshed = await loadTermOffers(termCurrentUrl);
-      termStatus.hidden = false;
-      termStatus.textContent = refreshed ? (result.message || 'Alerta marcado como lido.') : 'Alerta marcado como lido, mas não foi possível atualizar a lista. Tente novamente.';
-      termBody.querySelector(`#${CSS.escape(cardId)} .offer-summary`)?.focus();
-    } catch (error) {
-      termStatus.hidden = false;
-      termStatus.textContent = saved ? 'Alerta marcado como lido, mas não foi possível atualizar a lista. Tente novamente.' : (error.message || 'Não foi possível confirmar a leitura. Atualize a lista para conferir.');
-    } finally {
-      button.disabled = false;
-      termActionBusy = false;
-    }
-  });
+  termBody.addEventListener('submit', handleOfferCardSubmit);
 }
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
@@ -394,28 +416,7 @@ if (feed) {
     finally { busy = false; }
   });
   updateButton.addEventListener('click', () => refresh.click());
-  feed.addEventListener('submit', async (event) => {
-    const form = event.target;
-    if (!form.matches('[data-mark-seen]')) return;
-    event.preventDefault();
-    if (busy) return;
-    busy = true;
-    const button = event.submitter || form.querySelector('button');
-    const cardId = form.closest('.offer-card').id;
-    button.disabled = true;
-    let saved = false;
-    try {
-      const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
-      if (!response.ok || !(await response.json()).ok) throw new Error();
-      saved = true;
-      await loadPage(await fetch(`${feed.dataset.alerts === 'true' ? '/alerts' : '/'}?${query}`, {credentials: 'same-origin'}));
-      document.getElementById(cardId)?.querySelector('.offer-summary')?.focus({preventScroll: true});
-      toast('Alerta marcado como lido.');
-      await poll();
-    } catch {
-      toast(saved ? 'Alerta marcado como lido, mas a lista não foi atualizada. Tente atualizar.' : 'Não foi possível confirmar a leitura. Atualize a lista para conferir.', true);
-    } finally { button.disabled = false; busy = false; }
-  });
+  feed.addEventListener('submit', handleOfferCardSubmit);
   setInterval(poll, 30000);
 }
 

@@ -2,6 +2,7 @@
 
 - Status: aceita
 - Data: 2026-11-05
+- Gerenciamento de exclusão atualizado em 2026-11-06 por [ADR-0007](ADR-0007-exclusao-logica-alertas.md).
 
 ## Contexto
 

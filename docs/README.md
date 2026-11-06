@@ -12,6 +12,7 @@ Organização adaptada do RazorMiniflux: contrato operacional na raiz, decisões
 | [ADR-0004](architecture/ADR-0004-notificacoes-gotify.md) | Configuração e envio de alertas ao Gotify |
 | [ADR-0005](architecture/ADR-0005-retencao-e-gerenciamento-alertas.md) | Retenção de ofertas e gerenciamento de alertas |
 | [ADR-0006](architecture/ADR-0006-extracao-ia-ofertas.md) | Extração manual de ofertas com OpenAI/OpenRouter |
+| [ADR-0007](architecture/ADR-0007-exclusao-logica-alertas.md) | Exclusão lógica e desfazer ações nos cards de alerta |
 | [Primeira entrega](plans/primeira-entrega.md) | Escopo, critérios de aceite e estado da entrega |
 | [Operação](operacao.md) | Publicação, dados, atualização e recuperação |
 | [Verificação](verificacao.md) | Como repetir testes e limites das evidências |

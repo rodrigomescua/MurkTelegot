@@ -39,6 +39,41 @@ for number in range(1, 22):
             page.locator('#username').fill('admin')
             page.locator('#panel-password').fill('test-password-long-enough')
             page.get_by_role('button', name='Entrar').tap()
+            page.get_by_role('link', name='Ofertas').wait_for()
+            page.goto(f'http://127.0.0.1:{port}/alerts')
+            unread_cards = page.locator('section[aria-labelledby="unread-title"] .offer-card')
+            unread_card = unread_cards.first
+            card_id = unread_card.get_attribute('id')
+            unread_card.locator('[data-mark-seen] button').tap()
+            unread_card.get_by_text('Alerta marcado como lido.').wait_for()
+            assert unread_card.get_attribute('id') == card_id
+            unread_card.get_by_role('button', name='Desfazer').tap()
+            unread_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            unread_card.locator('[data-mark-seen] button').tap()
+            unread_card.locator('.offer-action-overlay').wait_for(state='visible')
+            page.reload()
+            read_cards = page.locator('section[aria-labelledby="read-title"] .offer-card')
+            assert read_cards.count() == 1
+            read_card = read_cards.first
+            card_id = read_card.get_attribute('id')
+            csrf = read_card.locator('[data-delete-offer] input[name="csrf"]').get_attribute('value')
+            read_card.locator('[data-delete-offer] button').tap()
+            read_card.get_by_text('Oferta excluída.').wait_for()
+            read_card.get_by_role('button', name='Desfazer').tap()
+            read_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            read_card.locator('[data-delete-offer] button').tap()
+            page.reload()
+            assert page.locator(f'section[aria-labelledby="read-title"] #{card_id}').count() == 0
+            restored = page.request.post(f'http://127.0.0.1:{port}/offers/{card_id.removeprefix("offer-")}/delete/undo',
+                                         form={'csrf': csrf})
+            assert restored.ok
+            page.goto(f'http://127.0.0.1:{port}/')
+            home_card = page.locator(f'#{card_id}')
+            home_card.locator('[data-delete-offer] button').tap()
+            home_card.get_by_text('Oferta excluída.').wait_for()
+            home_card.get_by_role('button', name='Desfazer').tap()
+            home_card.locator('.offer-action-overlay').wait_for(state='hidden')
+
             page.get_by_role('link', name='Termos frequentes').tap()
             page.wait_for_url('**/terms')
             term_box = page.locator('input[name="words"][value="cafeteira"]')
@@ -61,15 +96,18 @@ for number in range(1, 22):
             dialog.get_by_role('link', name='← Anterior').tap()
             dialog.get_by_text('Página 1 de 2').wait_for()
 
-            # Erro no POST mantém o card; sucesso atualiza a página sem navegar.
+            # Erro no POST mantém o card; sucesso mantém posição e permite desfazer.
             page.route('**/offers/*/seen', lambda route: route.fulfill(status=500, json={'ok': False}), times=1)
             seen = dialog.locator('[data-mark-seen]').first.get_by_role('button')
             seen.tap()
-            dialog.get_by_text('Não foi possível confirmar a leitura. Atualize a lista para conferir.').wait_for()
-            assert dialog.locator('[data-mark-seen]').count() == 20
-            dialog.locator('[data-mark-seen]').first.get_by_role('button').tap()
-            dialog.get_by_text('Alerta marcado como lido.').wait_for()
+            dialog.get_by_text('Não foi possível atualizar o alerta. Tente novamente.').wait_for()
             assert dialog.locator('[data-mark-seen]').count() == 19
+            dialog.locator('[data-mark-seen]').first.get_by_role('button').tap()
+            actioned = dialog.locator('.offer-card-actioned').first
+            actioned.get_by_text('Alerta marcado como lido.').wait_for()
+            assert dialog.locator('[data-mark-seen]').count() == 19
+            actioned.get_by_role('button', name='Desfazer').tap()
+            actioned.wait_for(state='detached')
             assert page.url.endswith('/terms')
 
             # A oferta individual fecha sobre o mesmo card; fechar restaura foco e seleção em lote.
@@ -127,6 +165,24 @@ for number in range(1, 22):
             assert not errors, errors
             print('Chromium móvel: modal, retry, paginação, leitura, oferta aninhada, foco, lote, ignorar seleção e fallback completos')
             fallback_context.close()
+
+            desktop = browser.new_context(viewport={'width': 1365, 'height': 900})
+            desktop_page = desktop.new_page()
+            desktop_page.on('pageerror', lambda error: errors.append(str(error)))
+            desktop_page.goto(f'http://127.0.0.1:{port}/login')
+            desktop_page.locator('#username').fill('admin')
+            desktop_page.locator('#panel-password').fill('test-password-long-enough')
+            desktop_page.get_by_role('button', name='Entrar').click()
+            desktop_page.goto(f'http://127.0.0.1:{port}/alerts')
+            desktop_card = desktop_page.locator('section[aria-labelledby="read-title"] .offer-card').first
+            desktop_card.locator('[data-delete-offer] button').click()
+            desktop_card.get_by_text('Oferta excluída.').wait_for()
+            desktop_card.get_by_role('button', name='Desfazer').click()
+            desktop_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            assert desktop_page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            assert not errors, errors
+            print('Chromium desktop: exclusão/desfazer sem overflow')
+            desktop.close()
             browser.close()
     finally:
         server.terminate()

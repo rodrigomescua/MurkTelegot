@@ -56,7 +56,7 @@ class StoreTests(unittest.TestCase):
         self.ingest(body='')
         self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
 
-    def test_expiry_uses_offer_date_and_preserves_alert_albums(self):
+    def test_expiry_uses_offer_date_preserves_alert_albums_and_purges_deleted(self):
         from datetime import datetime, timezone, timedelta
         self.store.add_ignored('blocked')
         now = datetime(2026, 11, 5, 12, tzinfo=timezone.utc)
@@ -72,9 +72,18 @@ class StoreTests(unittest.TestCase):
         add(16, 'Outra parte', timedelta(hours=5), 44)
         add(17, 'blocked álbum alertado', timedelta(hours=25), 45)
         add(18, 'Café', timedelta(hours=25), 45)
+        pending_delete = add(19, 'Café em exclusão pendente', timedelta(hours=25))
+        self.store.delete_offer(pending_delete)
+        expired_delete = add(20, 'Café exclusão expirada', timedelta(hours=25))
+        self.store.delete_offer(expired_delete)
+        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=?',
+                           ((now - timedelta(minutes=30)).isoformat(), pending_delete))
+        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=?',
+                           ((now - timedelta(hours=1, seconds=1)).isoformat(), expired_delete))
         self.store.expire_offers(now)
         self.assertEqual({r['message_id'] for r in self.store.rows('SELECT message_id FROM offers')},
-                         {11, 13, 14, 17, 18})
+                         {11, 13, 14, 17, 18, 19})
+        self.assertFalse(self.store.restore_deleted_offer(expired_delete))
 
     def test_duplicate_edit_and_matching_are_atomic(self):
         self.ingest()
@@ -85,6 +94,19 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
         reopened = Store(self.store.path)
         self.assertEqual(reopened.rows('SELECT body FROM offers')[0]['body'], 'Outro produto')
+
+    def test_late_album_parts_inherit_logical_deletion(self):
+        self.store.ingest(-100123, 10, 'Oferta sem alerta', '2026-11-04T12:00:00+00:00', None,
+                          source_json='{"grouped_id":77}')
+        self.store.delete_offer(1)
+        offer_id, alert = self.store.ingest(-100123, 11, 'Café parte atrasada', '2026-11-04T12:00:01+00:00', None,
+                                            source_json='{"grouped_id":77}', report_alert=True)
+        rows = self.store.rows('SELECT deleted_at FROM offers WHERE grouped_id=?', ('77',))
+        self.assertIsNotNone(offer_id)
+        self.assertIsNone(alert)
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row['deleted_at'] for row in rows))
+        self.assertEqual(self.store.feed(alerts=True), [])
 
     def test_add_rule_backfills_ignored_offers_and_album_parts(self):
         self.store.add_ignored('blocked')
@@ -366,7 +388,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('id="rules-list"', page.text)
         self.assertEqual(self.client.get('/rules-page', follow_redirects=False).status_code, 303)
 
-    def test_alert_offer_deletion_is_confirmed_authenticated_and_album_wide(self):
+    def test_alert_offer_deletion_is_soft_authenticated_and_album_wide(self):
         import json
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
         main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
@@ -393,9 +415,34 @@ class WebTests(unittest.TestCase):
                                           follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.post('/offers/1/delete', cookies=self.auth,
             data={'csrf': main.csrf_token, 'q': 'Notebook'}, follow_redirects=False).status_code, 303)
-        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [])
-        self.assertEqual(main.store.rows('SELECT * FROM hits'), [])
-        self.assertEqual(self.post('/offers/1/delete').status_code, 404)
+        self.assertEqual({row['message_id'] for row in main.store.rows('SELECT message_id FROM offers')}, {1, 2, 3})
+        self.assertEqual(main.store.rows('SELECT count(*) AS n FROM offers WHERE deleted_at IS NOT NULL')[0]['n'], 3)
+        self.assertEqual(main.store.rows('SELECT count(*) AS n FROM hits')[0]['n'], 2)
+        self.assertEqual(main.store.feed(alerts=True), [])
+        self.assertEqual(self.client.post('/offers/1/delete/undo', cookies=self.auth,
+            headers={'Accept': 'application/json'}, data={'csrf': main.csrf_token}).json()['ok'], True)
+        self.assertEqual(len(main.store.feed(alerts=True)), 1)
+
+    def test_card_actions_return_json_and_can_undo_without_moving_cards(self):
+        main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        first = main.store.ingest(1, 1, 'Notebook promoção', '2026-11-04', None)
+        headers = {'Accept': 'application/json'}
+        data = {'csrf': main.csrf_token}
+        self.assertEqual(self.client.post(f'/offers/{first}/seen/undo', headers=headers, data=data).status_code, 401)
+        self.assertEqual(self.client.post(f'/offers/{first}/seen/undo', cookies=self.auth,
+            headers=headers, data={}).status_code, 403)
+        seen = self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers=headers, data=data)
+        self.assertTrue(seen.json()['ok'])
+        self.assertEqual(seen.json()['unread'], 0)
+        self.assertTrue(self.client.post(f'/offers/{first}/seen/undo', cookies=self.auth,
+            headers=headers, data=data).json()['ok'])
+        deleted = self.client.post(f'/offers/{first}/delete', cookies=self.auth, headers=headers, data=data)
+        self.assertTrue(deleted.json()['ok'])
+        self.assertEqual(main.store.feed(alerts=True), [])
+        self.assertTrue(self.client.post(f'/offers/{first}/delete/undo', cookies=self.auth,
+            headers=headers, data=data).json()['ok'])
+        self.assertEqual(len(main.store.feed(alerts=True)), 1)
 
     def test_signed_offer_image_requires_valid_unexpired_signature(self):
         from pathlib import Path
@@ -414,6 +461,8 @@ class WebTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers['Cross-Origin-Resource-Policy'], 'cross-origin')
             self.assertEqual(response.content, b'fake jpeg')
+            main.store.delete_offer(offer['id'])
+            self.assertEqual(self.client.get(path).status_code, 404)
             self.assertEqual(self.client.get(path.replace(signature, 'bad')).status_code, 404)
             expired = int(time.time()) - 1
             expired_identity = f"{offer['chat_id']}:{offer['message_id']}:{expired}"
