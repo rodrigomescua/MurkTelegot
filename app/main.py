@@ -52,6 +52,7 @@ if public_url:
         raise RuntimeError('APP_PUBLIC_URL must be a valid HTTPS origin without credentials, query, or fragment')
 csrf_token = secrets.token_urlsafe(32)
 sessions = {}
+ai_requests = {}
 SESSION_AGE = 12 * 60 * 60
 
 
@@ -137,8 +138,22 @@ async def process_ai_job(job):
                                hashlib.sha256(model['api_key'].encode()).digest()))
                 started = time.monotonic()
                 try:
-                    extraction = await asyncio.to_thread(extract_ai, model['provider'], model['api_key'],
-                                                         model['id'], content['text'])
+                    request_task = asyncio.create_task(extract_ai(model['provider'], model['api_key'],
+                                                                  model['id'], content['text']))
+                    ai_requests[job['id']] = request_task
+                    if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
+                        request_task.cancel()
+                    try:
+                        extraction = await request_task
+                    finally:
+                        ai_requests.pop(job['id'], None)
+                except asyncio.CancelledError:
+                    if not await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
+                        raise
+                    await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
+                    outcome = 'cancelled'
+                    detail = 'Conexão local interrompida; o provedor ainda pode continuar o processamento ou cobrar.'
+                    finished = True
                 except (AIError, ValueError) as exc:
                     detail = str(exc)
                     outcome = 'failed'
@@ -365,9 +380,11 @@ async def ai_jobs_status():
 @app.post('/ai-jobs/{job_id}/cancel', dependencies=[Depends(authenticate), Depends(csrf)])
 async def cancel_ai_job(job_id: int):
     result = await asyncio.to_thread(store.cancel_ai_job, job_id)
+    if result == 'cancelling' and (request_task := ai_requests.get(job_id)):
+        request_task.cancel()
     notices = {
         'cancelled': f'Job #{job_id} cancelado.',
-        'cancelling': f'Cancelamento do job #{job_id} solicitado; aguardando a chamada atual terminar.',
+        'cancelling': f'Job #{job_id}: conexão local interrompida. O provedor ainda pode continuar o processamento ou cobrar; as ofertas restantes foram canceladas.',
         'missing': 'Job não encontrado.',
         'finished': 'Este job já foi concluído e não pode ser cancelado.',
     }
@@ -378,7 +395,7 @@ async def cancel_ai_job(job_id: int):
 async def ai_models(provider: str = Form(...), api_key: str = Form('', max_length=4096)):
     try:
         key = store.ai_api_key(provider, api_key)
-        models = await asyncio.to_thread(list_ai_models, provider, key)
+        models = await list_ai_models(provider, key)
     except ValueError as exc:
         return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
     return {'ok': True, 'models': models}

@@ -855,7 +855,7 @@ if (activeJobPanel) {
       let cancelNotice = activeJobPanel.querySelector('[data-cancel-notice]');
       if (job.status === 'cancelling' && !cancelNotice) {
         cancelNotice = document.createElement('p'); cancelNotice.className = 'field-help'; cancelNotice.dataset.cancelNotice = ''; cancelNotice.setAttribute('role', 'status');
-        cancelNotice.textContent = 'Cancelamento solicitado. Aguardando a solicitação atual terminar.';
+        cancelNotice.textContent = 'Conexão local interrompida. O provedor ainda pode continuar o processamento ou cobrar.';
         activeJobPanel.insertBefore(cancelNotice, activeJobPanel.querySelector('[data-active-progress]'));
       }
     } catch {

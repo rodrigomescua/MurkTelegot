@@ -1,7 +1,9 @@
 import json
+import asyncio
 import sqlite3
 import tempfile
 import unittest
+import httpx
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,23 +11,40 @@ from app.ai import AIError, extract, list_models
 from app.store import Store
 
 
-class AIClientTests(unittest.TestCase):
-    def test_catalog_is_sorted_and_uses_model_ids(self):
+class AIClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_provider_request_closes_pending_http_operation(self):
+        from app.ai import request
+        started = asyncio.Event()
+
+        async def handler(_request):
+            started.set()
+            await asyncio.Event().wait()
+
+        client_class = httpx.AsyncClient
+        with patch('app.ai.httpx.AsyncClient', side_effect=lambda **kwargs:
+                   client_class(transport=httpx.MockTransport(handler), **kwargs)):
+            pending = asyncio.create_task(request('openai', 'key', '/models'))
+            await started.wait()
+            pending.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await pending
+
+    async def test_catalog_is_sorted_and_uses_model_ids(self):
         with patch('app.ai.request', return_value={'data': [
             {'id': 'z-model', 'name': 'Zulu'}, {'id': 'a-model', 'name': 'Alpha'}, {'id': 'hidden'},
         ]}):
-            self.assertEqual(list_models('openai', 'key'), [
+            self.assertEqual(await list_models('openai', 'key'), [
                 {'id': 'a-model', 'name': 'Alpha'}, {'id': 'hidden', 'name': 'hidden'},
                 {'id': 'z-model', 'name': 'Zulu'},
             ])
 
-    def test_extraction_accepts_partial_json_and_rejects_empty_or_invalid_output(self):
+    async def test_extraction_accepts_partial_json_and_rejects_empty_or_invalid_output(self):
         payload = {'choices': [{'message': {'content': json.dumps({
             'product_name': 'Fone', 'description': 'texto que não deve ser extraído', 'original_price': 'R$ 200',
             'discounted_price': None, 'coupon_code': None,
         })}}]}
         with patch('app.ai.request', return_value=payload) as request:
-            self.assertEqual(extract('openrouter', 'key', 'model', 'Fone por R$ 200'), {
+            self.assertEqual(await extract('openrouter', 'key', 'model', 'Fone por R$ 200'), {
                 'product_name': 'Fone', 'original_price': 'R$ 200',
                 'discounted_price': None, 'coupon_code': None,
             })
@@ -34,7 +53,7 @@ class AIClientTests(unittest.TestCase):
             with self.subTest(content=content), patch('app.ai.request', return_value={
                     'choices': [{'message': {'content': content}}]}):
                 with self.assertRaises(AIError):
-                    extract('openai', 'key', 'model', 'Oferta')
+                    await extract('openai', 'key', 'model', 'Oferta')
 
 
 class AIStoreTests(unittest.TestCase):

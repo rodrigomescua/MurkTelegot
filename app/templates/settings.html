@@ -5,7 +5,7 @@
 {% if test_error %}<p class="notice error" role="alert">{{ test_error }}</p>{% endif %}
 <section aria-labelledby="ai-title" class="ai-settings">
 <h2 id="ai-title">Inteligência artificial</h2>
-<p>Configure provedores e modelos para extrair automaticamente novas ofertas não ignoradas e processar ofertas em segundo plano. A ordem e as chaves salvas são consultadas a cada chamada, então alterações valem para as próximas tentativas. Uma chamada já enviada não pode ser interrompida. O texto das ofertas é enviado ao provedor e pode consumir créditos da sua conta.</p>
+<p>Configure provedores e modelos para extrair automaticamente novas ofertas não ignoradas e processar ofertas em segundo plano. A ordem e as chaves salvas são consultadas a cada chamada, então alterações valem para as próximas tentativas. Cancelar interrompe a conexão local, mas o provedor ainda pode continuar o processamento e cobrar. O texto das ofertas é enviado ao provedor e pode consumir créditos da sua conta.</p>
 <form method="post" action="/settings/ai" id="ai-settings-form">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <input type="hidden" name="model_order" id="model-order" value='{{ ai_config.model_order|tojson }}'>

@@ -18,7 +18,7 @@ Requer Python 3.12 ou superior. Não é necessário Docker.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt httpx==0.28.1
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 ```
 

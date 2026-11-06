@@ -315,6 +315,71 @@ class WebTests(unittest.TestCase):
         self.assertEqual(jobs[0]['cancelled'], 2)
         self.assertTrue(all(card['extraction'] is None for card in main.store.feed()))
 
+    def test_cancelling_running_ai_job_interrupts_local_request_and_worker_continues(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100124, 'Grupo'))
+        for message_id in (1, 2):
+            main.store.ingest(-100124, message_id, f'Oferta {message_id}', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job(True)
+        job = main.store.claim_ai_job()
+        started = asyncio.Event()
+        calls = []
+
+        async def hanging_extract(*_args):
+            calls.append('started')
+            started.set()
+            await asyncio.Event().wait()
+
+        async def run():
+            with patch.object(main, 'extract_ai', side_effect=hanging_extract):
+                worker = asyncio.create_task(main.process_ai_job(job))
+                await started.wait()
+                await main.cancel_ai_job(job_id)
+                await asyncio.wait_for(worker, timeout=1)
+
+        asyncio.run(run())
+        jobs, active = main.store.ai_jobs()
+        self.assertEqual(calls, ['started'])
+        self.assertIsNone(active)
+        self.assertEqual(jobs[0]['status'], 'cancelled')
+        self.assertEqual(jobs[0]['cancelled'], 2)
+        self.assertEqual(jobs[0]['logs'][0]['outcome'], 'cancelled')
+        self.assertIn('pode continuar', jobs[0]['logs'][0]['detail'])
+
+        next_id, _ = main.store.enqueue_ai_job(True)
+        next_job = main.store.claim_ai_job()
+        self.assertEqual(next_job['id'], next_id)
+        with patch.object(main, 'extract_ai', return_value={'product_name': 'Produto'}):
+            asyncio.run(main.process_ai_job(next_job))
+        self.assertEqual(main.store.ai_jobs()[0][0]['status'], 'completed')
+
+    def test_worker_shutdown_keeps_inflight_item_recoverable(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100125, 'Grupo'))
+        main.store.ingest(-100125, 1, 'Oferta', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job(True)
+        job = main.store.claim_ai_job()
+        started = asyncio.Event()
+
+        async def hanging_extract(*_args):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def run():
+            with patch.object(main, 'extract_ai', side_effect=hanging_extract):
+                worker = asyncio.create_task(main.process_ai_job(job))
+                await started.wait()
+                worker.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await worker
+
+        asyncio.run(run())
+        self.assertEqual(main.store.rows('SELECT status FROM ai_job_items WHERE job_id=?',
+                                         (job_id,))[0]['status'], 'processing')
+        main.store.recover_ai_jobs()
+        self.assertEqual(main.store.rows('SELECT status FROM ai_job_items WHERE job_id=?',
+                                         (job_id,))[0]['status'], 'queued')
+
     def test_feed_layout_and_new_offers_button_structure(self):
         home = self.client.get('/', cookies=self.auth).text
         alerts = self.client.get('/alerts', cookies=self.auth).text

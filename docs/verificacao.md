@@ -4,7 +4,7 @@
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt httpx==0.28.1
+.venv/bin/pip install -r requirements.txt
 .venv/bin/python -m unittest discover -s tests -v
 bash -n run-dev.sh
 node --check app/static/app.js
@@ -96,3 +96,7 @@ A Home foi aberta no Chromium com uma cópia temporária de `.data/offers_backup
 119 testes `unittest` passaram com SQLite temporário. Cobrem migração aditiva, exclusão/restauração por álbum, herança da exclusão por partes Telegram atrasadas, filtros de cards/termos/contagem, expiração física e revogação de link HMAC de mídia. `node --check app/static/app.js`, `py_compile`, `bash -n run-dev.sh` e `git diff --check` passaram. `tests/browser_term_offers.py` passou no Chromium do sistema (`/snap/bin/chromium`): viewport móvel de 390 px com toque simulado e desktop de 1365 px; leitura, exclusão, desfazer, mudança de seção e ocultação após recarga, modal/paginação de termos e fallback sem JavaScript. Sem Telegram/Gotify reais.
 
 Release `v0.3.1` publicada no commit `526e189`; workflow `42240099828` aprovou testes e publicação AMD64. GHCR confirmou a tag `0.3.1` no digest `sha256:b2fdf6c8b37f86f5ce2189a6f2febf71d2e3e9351b8b801df4824522511ef583`. Appstore Runtipi atualizado em `fd55ed3`, `tipi_version` 25, tag exata no Compose/config, 462 testes e workflow `42240461812` aprovados. Instância Runtipi não atualizada.
+
+## Interromper chamada em voo ao cancelar job IA — 2026-11-06
+
+122 testes `unittest` passaram com armazenamento temporário e transporte HTTP simulado. Incluem cancelamento de requisição HTTP pendente, resultado descartado, conclusão das ofertas restantes e recuperação de item quando o worker encerra. `node --check app/static/app.js`, `bash -n run-dev.sh`, `compileall` e `git diff --check` passaram. Chromium verificou aviso/cancelamento em 390 px; o desktop 1365 px confirmou autenticação, aviso e cancelamento, sem auditoria separada de layout. Um ensaio visual inicial foi interrompido quando o worker consumiu a fila; usava apenas oferta e chave fictícias e pode ter enviado uma requisição de teste não autenticada ao endpoint OpenAI. Tarifas e encerramento remoto não foram testados: fechar a conexão local não garante que o provedor interrompa geração ou cobrança.
