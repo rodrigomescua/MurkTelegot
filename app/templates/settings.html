@@ -3,6 +3,46 @@
 <h1>Configurações</h1>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
 {% if test_error %}<p class="notice error" role="alert">{{ test_error }}</p>{% endif %}
+<section aria-labelledby="ai-title" class="ai-settings">
+<h2 id="ai-title">Inteligência artificial</h2>
+<p>Configure provedores e modelos para extrair automaticamente novas ofertas não ignoradas e processar ofertas em segundo plano. A ordem e as chaves salvas são consultadas a cada chamada, então alterações valem para as próximas tentativas. Uma chamada já enviada não pode ser interrompida. O texto das ofertas é enviado ao provedor e pode consumir créditos da sua conta.</p>
+<form method="post" action="/settings/ai" id="ai-settings-form">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="model_order" id="model-order" value='{{ ai_config.model_order|tojson }}'>
+<div class="ai-provider-grid">
+{% for provider, label in [('openai', 'OpenAI'), ('openrouter', 'OpenRouter')] %}
+<div class="ai-provider" data-provider="{{ provider }}">
+<h3>{{ label }}</h3>
+<p class="provider-state">{% if ai_config.providers[provider].configured %}<span class="badge">Chave configurada</span>{% else %}<span class="badge">Não configurado</span>{% endif %}</p>
+<label for="{{ provider }}-key">Chave da API</label>
+<input id="{{ provider }}-key" name="{{ provider }}_key" type="password" autocomplete="new-password" placeholder="{{ 'Deixe em branco para manter a chave salva' if ai_config.providers[provider].configured else 'Cole sua chave de API' }}" aria-describedby="{{ provider }}-key-help">
+<p class="field-help" id="{{ provider }}-key-help">{% if ai_config.providers[provider].configured %}Chave salva. Um campo vazio mantém a atual.{% else %}A chave será armazenada no volume de dados.{% endif %}</p>
+<div class="model-tools"><button class="secondary" type="button" data-load-models="{{ provider }}">Carregar modelos disponíveis</button></div>
+<details class="model-picker" data-model-picker="{{ provider }}"><summary data-model-picker-summary="{{ provider }}">{{ ai_config.providers[provider].models|length }} modelos selecionados · Abrir seletor</summary>
+<div class="model-picker-content"><label for="{{ provider }}-filter">Filtrar modelos disponíveis</label><input id="{{ provider }}-filter" type="search" data-model-filter="{{ provider }}" placeholder="Nome ou ID do modelo">
+<fieldset class="model-list"><legend>Marque os modelos desejados</legend>
+{% for model in ai_config.providers[provider].models %}
+<label class="check model-option" data-model-option data-provider="{{ provider }}"><input type="checkbox" name="models_{{ provider }}" value="{{ model }}" {% if ai_config.model_order|selectattr('provider','equalto',provider)|selectattr('id','equalto',model)|list %}checked{% endif %}><span>{{ model }}</span></label>
+{% else %}<p class="field-help" data-model-empty>Nenhum modelo carregado. Informe uma chave e use o botão acima.</p>{% endfor %}
+</fieldset></div></details>
+<p class="field-help" data-model-status="{{ provider }}" role="status" aria-live="polite"></p>
+</div>{% endfor %}
+</div>
+<div class="model-priority"><h3>Ordem de uso</h3><p class="field-help">Modelos marcados serão tentados nesta ordem. Selecione modelos acima e use os botões para ajustar.</p><ol id="model-priority-list">{% for item in ai_config.model_order %}<li data-priority-item data-provider="{{ item.provider }}" data-model="{{ item.id }}"><span>{{ 'OpenAI' if item.provider == 'openai' else 'OpenRouter' }} · {{ item.id }}</span><button type="button" class="secondary" data-move="up" aria-label="Mover {{ item.id }} para cima">↑</button><button type="button" class="secondary" data-move="down" aria-label="Mover {{ item.id }} para baixo">↓</button></li>{% endfor %}</ol><p id="priority-status" class="field-help" role="status" aria-live="polite"></p></div>
+<button>Salvar configuração de IA</button>
+</form>
+<form method="post" action="/settings/ai/jobs" class="job-create" data-job-create data-ready="{{ 'true' if ai_config.ready else 'false' }}" data-count-missing="{{ ai_config.eligible_count }}" data-count-all="{{ ai_config.total_cards }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><p><strong>Criar job de processamento</strong></p><p class="field-help" data-job-count aria-live="polite">{{ ai_config.eligible_count }} ofertas sem extração entre as {{ ai_config.total_cards }} exibidas no feed padrão da Home.</p>
+<fieldset><legend>Resultados já extraídos</legend>
+<label class="check"><input type="radio" name="replace_existing" value="false" checked> Manter os resultados existentes e pular ofertas já processadas</label>
+<label class="check"><input type="radio" name="replace_existing" value="true"> Substituir resultados existentes</label>
+</fieldset>
+{% if not ai_config.ready %}<p class="field-help">Configure uma chave e selecione ao menos um modelo para iniciar o processamento.</p>{% endif %}
+{% if not ai_config.total_cards %}<p class="field-help">A Home ainda não tem ofertas elegíveis.</p>{% endif %}
+<p class="field-help" data-unsaved-help>A configuração salva será consultada antes de cada chamada. Salve qualquer alteração antes de enfileirar.</p>
+<button data-start-job {% if not ai_config.ready or not ai_config.total_cards %}disabled{% endif %}>Iniciar job</button> <a href="/ai-jobs">Acompanhar jobs</a>
+</form>
+</section>
 <section aria-labelledby="gotify-title">
 <h2 id="gotify-title">Notificações Gotify</h2>
 <p>Receba uma notificação com o texto e o link da oferta quando ela gerar um novo alerta, inclusive se estiver oculta por palavras ignoradas.</p>

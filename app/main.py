@@ -1,9 +1,10 @@
 import asyncio
+import hashlib
+import hmac
+import json
 import logging
 import os
 import secrets
-import hmac
-import hashlib
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
+from app.ai import AIError, extract as extract_ai, list_models as list_ai_models
 from app.gotify import send_gotify, validate_gotify_token, validate_gotify_url
 from app.messages import media_info, present, preview_lines, source_data
 from app.store import Store
@@ -79,10 +81,96 @@ async def lifespan(app):
             await asyncio.to_thread(store.expire_offers)
             await asyncio.sleep(300)
     expiry = asyncio.create_task(expire_loop())
+    await asyncio.to_thread(store.recover_ai_jobs)
+    ai_worker = asyncio.create_task(ai_job_loop())
     yield
     expiry.cancel()
-    await asyncio.gather(expiry, return_exceptions=True)
+    ai_worker.cancel()
+    await asyncio.gather(expiry, ai_worker, return_exceptions=True)
     await telegram.stop()
+
+
+async def ai_job_loop():
+    while True:
+        job = await asyncio.to_thread(store.claim_ai_job)
+        if not job:
+            await asyncio.sleep(2)
+            continue
+        await process_ai_job(job)
+
+
+async def process_ai_job(job):
+    while True:
+        item = await asyncio.to_thread(store.claim_ai_item, job['id'])
+        if not item:
+            break
+        try:
+            if not job['replace_existing'] and await asyncio.to_thread(store.ai_item_has_extraction, item):
+                await asyncio.to_thread(store.finish_ai_item, item['id'], 'skipped')
+                continue
+            content = await asyncio.to_thread(store.ai_item_content, item)
+            if not content or not content['text'].strip():
+                await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
+                                         'sistema', '-', 'failed',
+                                         'A oferta foi removida ou não contém texto para extrair.', 0)
+                await asyncio.to_thread(store.finish_ai_item, item['id'], 'failed')
+                continue
+            attempted = set()
+            finished = False
+            while not finished:
+                if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
+                    await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
+                    break
+                models = ([] if len(attempted) >= 200 else
+                          await asyncio.to_thread(store.configured_ai_models))
+                model = next((candidate for candidate in models
+                              if (candidate['provider'], candidate['id'],
+                                  hashlib.sha256(candidate['api_key'].encode()).digest()) not in attempted), None)
+                if not model:
+                    detail = ('Limite de 200 tentativas por oferta atingido.' if len(attempted) >= 200 else
+                              'Nenhum modelo está configurado para as próximas tentativas.')
+                    await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
+                                             'sistema', '-', 'failed', detail, 0)
+                    await asyncio.to_thread(store.finish_ai_item, item['id'], 'failed')
+                    break
+                attempted.add((model['provider'], model['id'],
+                               hashlib.sha256(model['api_key'].encode()).digest()))
+                started = time.monotonic()
+                try:
+                    extraction = await asyncio.to_thread(extract_ai, model['provider'], model['api_key'],
+                                                         model['id'], content['text'])
+                except (AIError, ValueError) as exc:
+                    detail = str(exc)
+                    outcome = 'failed'
+                except Exception:
+                    detail = 'Falha interna ao consultar o modelo.'
+                    outcome = 'failed'
+                else:
+                    detail = 'Dados comerciais extraídos.'
+                    outcome = 'succeeded'
+                if outcome == 'succeeded':
+                    saved = await asyncio.to_thread(store.finish_ai_item, item['id'], 'succeeded',
+                                                    extraction, content['content_hash'])
+                    if saved == 'stale':
+                        outcome = 'skipped'
+                        detail = 'Resultado descartado porque a oferta mudou durante a extração.'
+                    elif saved == 'cancelled':
+                        outcome = 'cancelled'
+                        detail = 'Job cancelado durante a chamada; resultado descartado.'
+                    finished = True
+                await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
+                                         model['provider'], model['id'], outcome, detail,
+                                         int((time.monotonic() - started) * 1000))
+                if outcome == 'failed' and await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
+                    await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
+                    finished = True
+                if outcome in ('succeeded', 'skipped', 'cancelled'):
+                    finished = True
+        except Exception:
+            logging.getLogger(__name__).warning('Falha ao processar job de IA %s, oferta %s',
+                                                job['id'], item['id'])
+            await asyncio.to_thread(store.finish_ai_item, item['id'], 'failed')
+    await asyncio.to_thread(store.finish_ai_job, job['id'])
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -247,11 +335,87 @@ async def telegram_action(request: Request, action: str, phone: str = Form('', m
 @app.get('/settings', dependencies=[Depends(authenticate)])
 async def settings_page(request: Request, notice: str = '', test_error: str = ''):
     config = store.gotify_settings()
+    ai_config = store.ai_settings()
+    ai_cards = store.feed()
+    ai_config['total_cards'] = len(ai_cards)
+    ai_config['eligible_count'] = sum(not card.get('extraction') for card in ai_cards)
+    ai_config['ready'] = bool(ai_config['model_order']) and all(
+        ai_config['providers'][item['provider']]['configured'] for item in ai_config['model_order'])
     return templates.TemplateResponse(request, 'settings.html', {
         'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
         'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
         'frequent_terms_min_chars': store.frequent_terms_min_chars(),
+        'ai_config': ai_config,
     })
+
+
+@app.get('/ai-jobs', dependencies=[Depends(authenticate)])
+async def ai_jobs_page(request: Request, notice: str = ''):
+    jobs, active = store.ai_jobs()
+    return templates.TemplateResponse(request, 'ai_jobs.html', {
+        'csrf': csrf_token, 'jobs': jobs, 'active_job': active, 'notice': notice,
+    })
+
+
+@app.get('/ai-jobs/status', dependencies=[Depends(authenticate)])
+async def ai_jobs_status():
+    return {'active_job': store.ai_job_status()}
+
+
+@app.post('/ai-jobs/{job_id}/cancel', dependencies=[Depends(authenticate), Depends(csrf)])
+async def cancel_ai_job(job_id: int):
+    result = await asyncio.to_thread(store.cancel_ai_job, job_id)
+    notices = {
+        'cancelled': f'Job #{job_id} cancelado.',
+        'cancelling': f'Cancelamento do job #{job_id} solicitado; aguardando a chamada atual terminar.',
+        'missing': 'Job não encontrado.',
+        'finished': 'Este job já foi concluído e não pode ser cancelado.',
+    }
+    return RedirectResponse('/ai-jobs?' + urlencode({'notice': notices[result]}), status_code=303)
+
+
+@app.post('/settings/ai/models', dependencies=[Depends(authenticate), Depends(csrf)])
+async def ai_models(provider: str = Form(...), api_key: str = Form('', max_length=4096)):
+    try:
+        key = store.ai_api_key(provider, api_key)
+        models = await asyncio.to_thread(list_ai_models, provider, key)
+    except ValueError as exc:
+        return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
+    return {'ok': True, 'models': models}
+
+
+@app.post('/settings/ai', dependencies=[Depends(authenticate), Depends(csrf)])
+async def save_ai_settings(openai_key: str = Form('', max_length=4096),
+                           openrouter_key: str = Form('', max_length=4096),
+                           models_openai: list[str] = Form(default=[]),
+                           models_openrouter: list[str] = Form(default=[]),
+                           model_order: str = Form('', max_length=100_000)):
+    try:
+        submitted_order = json.loads(model_order) if model_order else []
+        selected = {
+            'openai': [model for model in models_openai if model],
+            'openrouter': [model for model in models_openrouter if model],
+        }
+        allowed = {(provider, model) for provider, models in selected.items() for model in models}
+        ordered = [item for item in submitted_order if isinstance(item, dict) and
+                   (item.get('provider'), item.get('id')) in allowed] if isinstance(submitted_order, list) else []
+        seen = {(item['provider'], item['id']) for item in ordered}
+        ordered.extend({'provider': provider, 'id': model} for provider in ('openai', 'openrouter')
+                       for model in selected[provider] if (provider, model) not in seen)
+        store.save_ai_settings(openai_key, openrouter_key, ordered)
+    except (ValueError, TypeError) as exc:
+        return settings_redirect(str(exc) or 'A ordem dos modelos é inválida.', error=True)
+    return settings_redirect('Configuração de IA salva.')
+
+
+@app.post('/settings/ai/jobs', dependencies=[Depends(authenticate), Depends(csrf)])
+async def enqueue_ai_job(replace_existing: bool = Form(False)):
+    try:
+        job_id, count = store.enqueue_ai_job(replace_existing)
+    except ValueError as exc:
+        return settings_redirect(str(exc), error=True)
+    return RedirectResponse('/ai-jobs?' + urlencode({'notice': f'Job #{job_id} criado para {count} ofertas.'}),
+                            status_code=303)
 
 
 @app.post('/settings/frequent-terms', dependencies=[Depends(authenticate), Depends(csrf)])

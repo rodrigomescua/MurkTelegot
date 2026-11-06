@@ -1,3 +1,5 @@
+import asyncio
+import json
 import os
 import hashlib
 import hmac
@@ -8,6 +10,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.store import Store, matches
+from app.ai import AIError
 
 _runtime = tempfile.TemporaryDirectory()
 os.environ.update(DATA_DIR=_runtime.name, APP_PASSWORD='test-password-with-32-characters')
@@ -136,6 +139,159 @@ class WebTests(unittest.TestCase):
         self.assertIn('Seu radar está pronto', response.text)
         self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
         self.assertEqual(self.client.post('/rules', cookies=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
+
+    def test_ai_settings_use_auth_csrf_and_never_render_saved_keys(self):
+        self.assertEqual(self.client.get('/settings', follow_redirects=False).status_code, 303)
+        page = self.client.get('/settings', cookies=self.auth)
+        self.assertIn('Inteligência artificial', page.text)
+        self.assertIn('Carregar modelos disponíveis', page.text)
+        bad = self.client.post('/settings/ai', cookies=self.auth, data={
+            'csrf': 'invalid', 'openai_key': 'private-key', 'models_openai': 'gpt-mini',
+            'model_order': '[{"provider":"openai","id":"gpt-mini"}]',
+        })
+        self.assertEqual(bad.status_code, 403)
+        response = self.client.post('/settings/ai', cookies=self.auth, data={
+            'csrf': main.csrf_token, 'openai_key': 'private-key', 'models_openai': ['gpt-mini'],
+            'model_order': '[{"provider":"openai","id":"gpt-mini"}]',
+        }, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(main.store.ai_api_key('openai'), 'private-key')
+        page = self.client.get('/settings', cookies=self.auth)
+        self.assertNotIn('private-key', page.text)
+        self.assertIn('Chave configurada', page.text)
+
+    def test_ai_catalog_uses_typed_key_without_persisting_it(self):
+        self.assertEqual(self.client.post('/settings/ai/models', headers={'Accept': 'application/json'}, data={
+            'csrf': main.csrf_token, 'provider': 'openai', 'api_key': 'no-session',
+        }).status_code, 401)
+        self.assertEqual(self.client.post('/settings/ai/models', cookies=self.auth, data={
+            'csrf': 'invalid', 'provider': 'openai',
+        }).status_code, 403)
+        with patch.object(main, 'list_ai_models', return_value=[{'id': 'model-a', 'name': 'Model A'}]) as catalog:
+            response = self.post('/settings/ai/models', {'provider': 'openai', 'api_key': 'typed-key'})
+        self.assertEqual(response.json(), {'ok': True, 'models': [{'id': 'model-a', 'name': 'Model A'}]})
+        catalog.assert_called_once_with('openai', 'typed-key')
+        self.assertEqual(main.store.rows("SELECT * FROM settings WHERE key='ai_openai_key'"), [])
+
+    def test_ai_job_falls_back_and_extraction_is_prioritized_on_all_offer_screens(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        main.store.add_rule('Relógio', 'relógio')
+        main.store.ingest(-100123, 1, 'Oferta original: relógio R$ 200', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', 'key-router', [
+            {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
+        ])
+        response = self.client.post('/settings/ai/jobs', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'replace_existing': 'false'},
+                                    follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn('/ai-jobs?notice=Job+', response.headers['location'])
+        jobs_page = self.client.get('/ai-jobs', cookies=self.auth)
+        self.assertIn('Job #1', jobs_page.text)
+        self.assertIn('Progresso do job', jobs_page.text)
+        self.assertEqual(self.client.get('/ai-jobs/status', cookies=self.auth).status_code, 200)
+        job = main.store.claim_ai_job()
+        extraction = {
+            'product_name': 'Relógio <novo>',
+            'original_price': 'R$ 200', 'discounted_price': 'R$ 120', 'coupon_code': 'TEMPO20',
+        }
+        with patch.object(main, 'extract_ai', side_effect=[AIError('HTTP 429'), extraction]) as extract:
+            asyncio.run(main.process_ai_job(job))
+        self.assertEqual([call.args[0] for call in extract.call_args_list], ['openai', 'openrouter'])
+        attempts = main.store.ai_jobs()[0][0]['logs']
+        self.assertEqual([log['outcome'] for log in reversed(attempts)], ['failed', 'succeeded'])
+        for url in ('/', '/alerts', '/terms/offers?word=relógio'):
+            page = self.client.get(url, cookies=self.auth)
+            self.assertIn('Relógio &lt;novo&gt;', page.text)
+            self.assertIn('R$ 120', page.text)
+            self.assertIn('TEMPO20', page.text)
+            self.assertNotIn('Modelo premium', page.text)
+            self.assertIn('Oferta original: relógio R$ 200', page.text)
+
+    def test_later_default_job_skips_extractions_completed_by_an_earlier_job(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        main.store.ingest(-100123, 1, 'Oferta teste', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        first_id, _ = main.store.enqueue_ai_job()
+        second_id, _ = main.store.enqueue_ai_job()
+        result = {'product_name': 'Produto', 'original_price': None,
+                  'discounted_price': None, 'coupon_code': None}
+        first_job = main.store.claim_ai_job()
+        self.assertEqual(first_job['id'], first_id)
+        with patch.object(main, 'extract_ai', return_value=result):
+            asyncio.run(main.process_ai_job(first_job))
+        second_job = main.store.claim_ai_job()
+        self.assertEqual(second_job['id'], second_id)
+        with patch.object(main, 'extract_ai') as extract:
+            asyncio.run(main.process_ai_job(second_job))
+        extract.assert_not_called()
+        jobs, _ = main.store.ai_jobs()
+        second = next(job for job in jobs if job['id'] == second_id)
+        self.assertEqual(second['status'], 'completed')
+        self.assertEqual(second['skipped'], 1)
+
+    def test_live_provider_settings_apply_before_each_fallback_call(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        main.store.ingest(-100123, 1, 'Oferta teste', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', 'key-router', [
+            {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
+        ])
+        main.store.enqueue_ai_job()
+        job = main.store.claim_ai_job()
+        calls = []
+
+        def extract(provider, key, model, text):
+            calls.append((provider, key, model))
+            if len(calls) == 1:
+                main.store.save_ai_settings('rotated-openai', '', [{'provider': 'openai', 'id': 'replacement'}])
+                raise AIError('Falha simulada')
+            return {'product_name': 'Produto atualizado', 'original_price': None,
+                    'discounted_price': None, 'coupon_code': None}
+
+        with patch.object(main, 'extract_ai', side_effect=extract):
+            asyncio.run(main.process_ai_job(job))
+        self.assertEqual(calls, [('openai', 'key-openai', 'model-first'),
+                                 ('openai', 'rotated-openai', 'replacement')])
+
+    def test_cancel_pending_ai_job_requires_auth_and_csrf(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        main.store.ingest(-100123, 1, 'Oferta teste', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job()
+        page = self.client.get('/ai-jobs', cookies=self.auth)
+        self.assertIn(f'action="/ai-jobs/{job_id}/cancel"', page.text)
+        self.assertIn('Cancelar job', page.text)
+        self.assertEqual(self.client.post(f'/ai-jobs/{job_id}/cancel', data={'csrf': main.csrf_token},
+                                          follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post(f'/ai-jobs/{job_id}/cancel', cookies=self.auth,
+                                          data={'csrf': 'bad'}).status_code, 403)
+        response = self.client.post(f'/ai-jobs/{job_id}/cancel', cookies=self.auth,
+                                    data={'csrf': main.csrf_token}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(main.store.ai_jobs()[0][0]['status'], 'cancelled')
+
+    def test_running_ai_job_cancellation_discards_call_result_and_stops_batch(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        for message_id in (1, 2):
+            main.store.ingest(-100123, message_id, f'Oferta {message_id}', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job(True)
+        job = main.store.claim_ai_job()
+        calls = []
+
+        def extract(provider, key, model, text):
+            calls.append(text)
+            main.store.cancel_ai_job(job_id)
+            return {'product_name': 'Resultado descartado', 'original_price': None,
+                    'discounted_price': None, 'coupon_code': None}
+
+        with patch.object(main, 'extract_ai', side_effect=extract):
+            asyncio.run(main.process_ai_job(job))
+        jobs, active = main.store.ai_jobs()
+        self.assertEqual(len(calls), 1)
+        self.assertIsNone(active)
+        self.assertEqual(jobs[0]['status'], 'cancelled')
+        self.assertEqual(jobs[0]['cancelled'], 2)
+        self.assertTrue(all(card['extraction'] is None for card in main.store.feed()))
 
     def test_feed_layout_and_new_offers_button_structure(self):
         home = self.client.get('/', cookies=self.auth).text

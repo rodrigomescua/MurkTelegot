@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Jobs de IA</h1>
+{% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+{% if active_job %}
+<section class="job-card active-job" aria-labelledby="active-job-title" data-active-job="{{ active_job.id }}">
+<h2 id="active-job-title">{{ 'Cancelando job' if active_job.status == 'cancelling' else 'Job em andamento' if active_job.status == 'running' else 'Próximo job na fila' }}</h2>
+<p><strong>Job #{{ active_job.id }}</strong> · <span data-active-status>{{ {"queued":"Na fila", "running":"Em andamento", "cancelling":"Cancelamento solicitado", "completed":"Concluído", "completed_with_errors":"Concluído com falhas", "failed":"Com falhas", "cancelled":"Cancelado"}.get(active_job.status, "Status indisponível") }}</span></p>
+<p data-active-summary role="status" aria-live="polite">{{ active_job.processed }} de {{ active_job.total }} ofertas processadas · {{ active_job.succeeded }} concluídas · {{ active_job.skipped }} puladas · {{ active_job.failed }} com erro · {{ active_job.cancelled }} canceladas</p>
+<progress data-active-progress value="{{ active_job.processed }}" max="{{ active_job.total if active_job.total else 1 }}" aria-label="Progresso do job: {{ active_job.processed }} de {{ active_job.total }} ofertas"></progress>
+<p class="field-help" data-active-percent>{{ active_job.processed }} de {{ active_job.total }} ({{ ((active_job.processed / active_job.total * 100)|round|int) if active_job.total else 0 }}%)</p>
+<p class="field-help">O progresso é atualizado automaticamente enquanto esta página estiver aberta.</p>
+{% if active_job.status in ('queued', 'running') %}<form method="post" action="/ai-jobs/{{ active_job.id }}/cancel" data-job-cancel{% if active_job.status == 'running' %} data-confirm="Cancelar este lote? A solicitação atual ao provedor continuará até terminar; depois, o resultado será descartado e as ofertas restantes não serão processadas."{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Cancelar job</button></form>{% elif active_job.status == 'cancelling' %}<p class="field-help" role="status">Cancelamento solicitado. Aguardando a solicitação atual terminar.</p>{% endif %}
+</section>
+{% endif %}
+{% if jobs %}
+<div class="job-list">
+{% for job in jobs %}
+<article class="job-card {% if active_job and job.id == active_job.id %}job-card-active{% endif %}" data-job-id="{{ job.id }}">
+<div class="job-heading"><h2>Job #{{ job.id }}</h2><span class="badge job-status-{{ job.status }}">{{ {"queued":"Na fila", "running":"Em andamento", "cancelling":"Cancelando", "completed":"Concluído", "completed_with_errors":"Concluído com falhas", "failed":"Com falhas", "cancelled":"Cancelado"}.get(job.status, "Status indisponível") }}</span></div>
+<p class="field-help"><time datetime="{{ job.created_at }}">{{ job.created_at }}</time></p>
+<p class="field-help">{{ 'Atualiza resultados existentes' if job.replace_existing else 'Pula resultados que já existiam ao criar este job' }}</p>
+<p>{{ job.processed }} / {{ job.total }} processadas · {{ job.succeeded }} concluídas · {{ job.skipped }} puladas · <strong class="{% if job.failed %}error-text{% endif %}">{{ job.failed }} com erro</strong> · {{ job.cancelled }} canceladas</p>
+{% if job.status in ('queued', 'running') and not (active_job and job.id == active_job.id) %}<form method="post" action="/ai-jobs/{{ job.id }}/cancel"{% if job.status == 'running' %} data-confirm="Cancelar este lote? A solicitação atual ao provedor continuará até terminar; depois, o resultado será descartado e as ofertas restantes não serão processadas."{% endif %}><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Cancelar job</button></form>{% elif job.status == 'cancelling' and not (active_job and job.id == active_job.id) %}<p class="field-help" role="status">Cancelamento solicitado; aguardando a solicitação atual terminar.</p>{% endif %}
+{% if job.status in ('completed', 'completed_with_errors', 'failed', 'cancelled') %}<p class="job-outcome">{% if job.status == 'cancelled' %}Cancelado. As ofertas restantes não foram processadas.{% elif job.failed %}Concluído com erros. Consulte as tentativas abaixo.{% elif job.status == 'completed' %}Concluído sem erros.{% else %}Job encerrado com falhas.{% endif %}</p>{% endif %}
+{% if job.logs %}<details class="job-attempts"><summary>Tentativas ({{ job.logs|length }})</summary><ul>{% for log in job.logs %}<li class="job-log {% if log.outcome == 'failed' or log.outcome == 'error' %}job-log-error{% endif %}"><p><strong>{{ log.offer_label }}</strong></p><p>{{ 'OpenAI' if log.provider == 'openai' else 'OpenRouter' if log.provider == 'openrouter' else log.provider }} · {{ log.model }} · {{ 'sucesso' if log.outcome == 'succeeded' else 'cancelado' if log.outcome == 'cancelled' else 'falhou' }}</p><p class="field-help">{{ log.detail }}{% if log.duration_ms %} · {{ (log.duration_ms / 1000)|round(1) }} s{% endif %}</p><time datetime="{{ log.created_at }}">{{ log.created_at }}</time></li>{% endfor %}</ul></details>{% else %}<p class="field-help">Ainda não há tentativas registradas.</p>{% endif %}
+</article>
+{% endfor %}
+</div>
+{% else %}
+<section class="empty"><h2>Nenhum job de IA ainda</h2><p>Configure os provedores e crie um job para começar a acompanhar o processamento.</p><a class="button" href="/settings#ai-title">Configurar IA</a></section>
+{% endif %}
+{% endblock %}

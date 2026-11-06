@@ -32,7 +32,8 @@ class Telegram:
         self.task = None
         if self.client:
             self.client.add_event_handler(self.receive, events.NewMessage())
-            self.client.add_event_handler(self.receive, events.MessageEdited())
+            self.client.add_event_handler(self.receive_album, events.Album())
+            self.client.add_event_handler(self.receive_edit, events.MessageEdited())
 
     async def start(self):
         if self.client:
@@ -100,15 +101,40 @@ class Telegram:
                                  message.date.isoformat(), message_link(chat_id, message.id),
                                  source_json=json.dumps(source), report_alert=report_alert)
 
-    async def receive(self, event):
+    async def receive(self, event, auto_extract=True):
         try:
             # Only selected chats are stored; private conversations never enter the database.
             if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
                 return
+            if auto_extract and getattr(event.message, 'grouped_id', None) is not None:
+                return
             result = self.save_message(event.chat_id, event.message, report_alert=True)
             await self.notify_alert(result[1] if result else None)
+            if auto_extract and result:
+                await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[result[0]], automatic=True)
         except Exception:
             log.warning('Failed to store a Telegram message; private content omitted from logs')
+
+    async def receive_album(self, event):
+        try:
+            if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
+                return
+            offer_ids = []
+            for message in event.messages:
+                result = self.save_message(event.chat_id, message, report_alert=True)
+                if result:
+                    offer_ids.append(result[0])
+                    await self.notify_alert(result[1])
+            if offer_ids:
+                root = self.store.rows('''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
+                    ORDER BY message_id LIMIT 1''', (event.chat_id, str(event.grouped_id)))
+                if root:
+                    await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[root[0]['id']], automatic=True)
+        except Exception:
+            log.warning('Failed to store a Telegram album; private content omitted from logs')
+
+    async def receive_edit(self, event):
+        await self.receive(event, auto_extract=False)
 
     async def notify_alert(self, alert):
         if not alert:

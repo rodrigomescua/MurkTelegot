@@ -224,6 +224,29 @@ class GotifyTests(unittest.TestCase):
 
 
 class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
+    async def test_telegram_automatically_queues_new_offer_and_album_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.save_ai_settings('secret-openai', '', [{'provider': 'openai', 'id': 'a'}])
+            telegram = Telegram(store, Path(directory), None, None)
+
+            def message(mid, body, grouped=None):
+                return SimpleNamespace(id=mid, raw_text=body, date=datetime.now(timezone.utc),
+                                       grouped_id=grouped,
+                                       to_json=lambda: json.dumps({'grouped_id': grouped}))
+
+            await telegram.receive(SimpleNamespace(chat_id=1, message=message(1, 'Oferta')))
+            await telegram.receive(SimpleNamespace(chat_id=1, message=message(2, 'parte A', 77)))
+            await telegram.receive_album(SimpleNamespace(chat_id=1, grouped_id=77,
+                                                         messages=[message(2, 'parte A', 77),
+                                                                   message(3, 'parte B', 77)]))
+            items = store.rows('SELECT offer_id FROM ai_job_items ORDER BY id')
+            self.assertEqual(len(items), 2)
+            self.assertEqual(len({row['offer_id'] for row in items}), 2)
+            album = store.feed()[0]
+            self.assertEqual([part['body'] for part in album['parts']], ['parte A', 'parte B'])
+
     async def test_album_notification_uses_image_from_any_non_spoiler_part(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')

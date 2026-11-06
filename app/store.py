@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -93,6 +94,25 @@ class Store:
                     offer_id INTEGER NOT NULL REFERENCES offers(id),
                     rule_id INTEGER NOT NULL REFERENCES rules(id),
                     PRIMARY KEY(offer_id, rule_id));
+                CREATE TABLE IF NOT EXISTS offer_extractions (
+                    offer_id INTEGER PRIMARY KEY REFERENCES offers(id) ON DELETE CASCADE,
+                    product_name TEXT, original_price TEXT,
+                    discounted_price TEXT, coupon_code TEXT, job_id INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS ai_jobs (
+                    id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
+                    models_json TEXT NOT NULL, created_at TEXT NOT NULL,
+                    started_at TEXT, finished_at TEXT);
+                CREATE TABLE IF NOT EXISTS ai_job_items (
+                    id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
+                    position INTEGER NOT NULL, offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+                    UNIQUE(job_id, position));
+                CREATE TABLE IF NOT EXISTS ai_job_attempts (
+                    id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL REFERENCES ai_job_items(id) ON DELETE CASCADE,
+                    provider TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL,
+                    detail TEXT NOT NULL, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
             ''')
             if columns:
                 db.execute('BEGIN')
@@ -128,6 +148,303 @@ class Store:
     def execute(self, sql, args=()):
         with self.connect() as db:
             db.execute(sql, args)
+
+    def ai_settings(self):
+        settings = {row['key']: row['value'] for row in self.rows(
+            "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key','ai_model_order')")}
+        try:
+            order = json.loads(settings.get('ai_model_order', '[]'))
+        except (TypeError, ValueError):
+            order = []
+        if not isinstance(order, list):
+            order = []
+        order = [item for item in order if isinstance(item, dict) and
+                 item.get('provider') in ('openai', 'openrouter') and
+                 isinstance(item.get('id'), str) and item['id']]
+        return {'providers': {
+            'openai': {'configured': bool(settings.get('ai_openai_key')), 'models': [i['id'] for i in order if i['provider'] == 'openai']},
+            'openrouter': {'configured': bool(settings.get('ai_openrouter_key')), 'models': [i['id'] for i in order if i['provider'] == 'openrouter']},
+        }, 'model_order': order}
+
+    def ai_api_key(self, provider, supplied=''):
+        if provider not in ('openai', 'openrouter'):
+            raise ValueError('Provedor inválido.')
+        supplied = supplied.strip()
+        if supplied:
+            return supplied
+        row = self.rows('SELECT value FROM settings WHERE key=?', (f'ai_{provider}_key',))
+        if not row:
+            raise ValueError('Informe e salve a chave deste provedor antes de continuar.')
+        return row[0]['value']
+
+    def configured_ai_models(self):
+        with self.connect() as db:
+            settings = {row['key']: row['value'] for row in db.execute(
+                "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key','ai_model_order')")}
+        try:
+            order = json.loads(settings.get('ai_model_order', '[]'))
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(order, list):
+            return []
+        return [{**item, 'api_key': settings.get(f"ai_{item['provider']}_key", '')}
+                for item in order if isinstance(item, dict) and
+                item.get('provider') in ('openai', 'openrouter') and
+                isinstance(item.get('id'), str) and item['id'] and
+                settings.get(f"ai_{item['provider']}_key")]
+
+    def save_ai_settings(self, openai_key, openrouter_key, model_order):
+        if len(openai_key) > 4096 or len(openrouter_key) > 4096:
+            raise ValueError('A chave de API excede o tamanho permitido.')
+        if not isinstance(model_order, list) or len(model_order) > 200:
+            raise ValueError('Selecione até 200 modelos para a hierarquia.')
+        normalized, seen = [], set()
+        for item in model_order:
+            if not isinstance(item, dict) or item.get('provider') not in ('openai', 'openrouter'):
+                raise ValueError('A ordem de modelos é inválida.')
+            model = item.get('id')
+            if not isinstance(model, str) or not model.strip() or len(model) > 256:
+                raise ValueError('O identificador de um modelo é inválido.')
+            key = (item['provider'], model.strip())
+            if key not in seen:
+                seen.add(key)
+                normalized.append({'provider': key[0], 'id': key[1]})
+        with self.connect() as db:
+            existing_keys = {row['key']: row['value'] for row in db.execute(
+                "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key')")}
+            for item in normalized:
+                supplied = openai_key if item['provider'] == 'openai' else openrouter_key
+                if not supplied.strip() and not existing_keys.get(f"ai_{item['provider']}_key"):
+                    provider_name = 'OpenAI' if item['provider'] == 'openai' else 'OpenRouter'
+                    raise ValueError(f'Informe a chave de API de {provider_name} para usar os modelos selecionados.')
+            for provider, supplied in (('openai', openai_key), ('openrouter', openrouter_key)):
+                if supplied.strip():
+                    db.execute('''INSERT INTO settings(key,value) VALUES(?,?)
+                        ON CONFLICT(key) DO UPDATE SET value=excluded.value''',
+                               (f'ai_{provider}_key', supplied.strip()))
+            db.execute('''INSERT INTO settings(key,value) VALUES('ai_model_order',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (json.dumps(normalized),))
+
+    def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            settings = {row['key']: row['value'] for row in db.execute(
+                "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key','ai_model_order')")}
+            if not settings.get('ai_model_order'):
+                if automatic:
+                    return None, 0
+                raise ValueError('Configure ao menos um provedor e modelo antes de iniciar o processamento.')
+            try:
+                models = json.loads(settings['ai_model_order'])
+            except (KeyError, ValueError):
+                if automatic:
+                    return None, 0
+                raise ValueError('Salve novamente a configuração dos modelos antes de iniciar o processamento.') from None
+            if not models or any(not settings.get(f"ai_{item.get('provider')}_key") for item in models):
+                if automatic:
+                    return None, 0
+                raise ValueError('Configure as chaves dos provedores selecionados antes de iniciar o processamento.')
+            cards = self.feed('', False, db)
+            if offer_ids is not None:
+                cards = [card for card in cards if card['id'] in offer_ids]
+            if not replace_existing or automatic:
+                cards = [card for card in cards if not card.get('extraction')]
+            if automatic:
+                cards = [card for card in cards if not db.execute('''SELECT 1 FROM ai_job_items i
+                    JOIN ai_jobs j ON j.id=i.job_id WHERE i.offer_id=? AND j.status IN ('queued','running','cancelling')
+                    AND i.status IN ('queued','processing') LIMIT 1''', (card['id'],)).fetchone()]
+            if not cards:
+                if automatic:
+                    return None, 0
+                raise ValueError('Não há ofertas elegíveis para processar na Home padrão.')
+            created = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            job_id = db.execute('''INSERT INTO ai_jobs(status,replace_existing,models_json,created_at)
+                VALUES('queued',?,?,?)''', (int(bool(replace_existing)), json.dumps(models), created)).lastrowid
+            db.executemany('''INSERT INTO ai_job_items(job_id,position,offer_id,chat_id,message_id)
+                VALUES(?,?,?,?,?)''', [(job_id, index, card['id'], card['chat_id'], card['message_id'])
+                                       for index, card in enumerate(cards)])
+            return job_id, len(cards)
+
+    def recover_ai_jobs(self):
+        with self.connect() as db:
+            finished = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            db.execute("UPDATE ai_job_items SET status='cancelled' WHERE status IN ('queued','processing') AND job_id IN (SELECT id FROM ai_jobs WHERE status='cancelling')")
+            db.execute("UPDATE ai_jobs SET status='cancelled',finished_at=? WHERE status='cancelling'", (finished,))
+            db.execute("UPDATE ai_job_items SET status='queued' WHERE status='processing'")
+            db.execute("UPDATE ai_jobs SET status='queued',started_at=NULL WHERE status='running'")
+
+    def claim_ai_job(self):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('''SELECT * FROM ai_jobs WHERE status='queued' AND NOT EXISTS
+                (SELECT 1 FROM ai_jobs WHERE status='running') ORDER BY id LIMIT 1''').fetchone()
+            if not job:
+                return None
+            now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+            db.execute("UPDATE ai_jobs SET status='running',started_at=? WHERE id=?", (now, job['id']))
+            return {**dict(job), 'status': 'running', 'started_at': now}
+
+    def claim_ai_item(self, job_id):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute("SELECT 1 FROM ai_jobs WHERE id=? AND status='running'", (job_id,)).fetchone() is None:
+                return None
+            item = db.execute("SELECT * FROM ai_job_items WHERE job_id=? AND status='queued' ORDER BY position LIMIT 1",
+                              (job_id,)).fetchone()
+            if not item:
+                return None
+            db.execute("UPDATE ai_job_items SET status='processing' WHERE id=?", (item['id'],))
+            return dict(item)
+
+    def ai_item_content(self, item):
+        with self.connect() as db:
+            root = db.execute('SELECT * FROM offers WHERE id=?', (item['offer_id'],)).fetchone()
+            if not root:
+                return None
+            if root['grouped_id'] is None:
+                parts = [root['body']]
+            else:
+                parts = [row[0] for row in db.execute(
+                    'SELECT body FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY message_id',
+                    (root['chat_id'], root['grouped_id']))]
+            text = '\n\n'.join(part for part in parts if part.strip())
+            return {'offer_id': root['id'], 'text': text,
+                    'content_hash': hashlib.sha256(text.encode()).hexdigest(),
+                    'label': f"Oferta #{root['message_id']}"}
+
+    def ai_item_has_extraction(self, item):
+        return bool(self.rows('SELECT 1 FROM offer_extractions WHERE offer_id=?', (item['offer_id'],)))
+
+    def record_ai_attempt(self, job_id, item_id, provider, model, outcome, detail, duration_ms):
+        created = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        with self.connect() as db:
+            db.execute('''INSERT INTO ai_job_attempts
+                (job_id,item_id,provider,model,outcome,detail,duration_ms,created_at)
+                VALUES(?,?,?,?,?,?,?,?)''',
+                       (job_id, item_id, provider, model, outcome, detail[:300], max(0, duration_ms), created))
+
+    def finish_ai_item(self, item_id, status, extraction=None, content_hash=None):
+        if status not in ('succeeded', 'failed', 'skipped', 'cancelled'):
+            raise ValueError('Estado de extração inválido.')
+        with self.connect() as db:
+            item = db.execute('''SELECT i.*,j.status AS job_status FROM ai_job_items i
+                JOIN ai_jobs j ON j.id=i.job_id WHERE i.id=?''', (item_id,)).fetchone()
+            if not item:
+                return 'missing'
+            if item['job_status'] in ('cancelling', 'cancelled'):
+                db.execute("UPDATE ai_job_items SET status='cancelled' WHERE id=?", (item_id,))
+                return 'cancelled'
+            if status == 'succeeded' and extraction:
+                root = db.execute('SELECT * FROM offers WHERE id=?', (item['offer_id'],)).fetchone()
+                if not root:
+                    db.execute("UPDATE ai_job_items SET status='skipped' WHERE id=?", (item_id,))
+                    return 'stale'
+                if root['grouped_id'] is None:
+                    parts = [root['body']]
+                else:
+                    parts = [row[0] for row in db.execute(
+                        'SELECT body FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY message_id',
+                        (root['chat_id'], root['grouped_id']))]
+                current_text = '\n\n'.join(part for part in parts if part.strip())
+                if content_hash and hashlib.sha256(current_text.encode()).hexdigest() != content_hash:
+                    db.execute("UPDATE ai_job_items SET status='skipped' WHERE id=?", (item_id,))
+                    return 'stale'
+                now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+                db.execute('''INSERT INTO offer_extractions
+                    (offer_id,product_name,original_price,discounted_price,coupon_code,job_id,updated_at)
+                    VALUES(?,?,?,?,?,?,?) ON CONFLICT(offer_id) DO UPDATE SET
+                    product_name=excluded.product_name,
+                    original_price=excluded.original_price,discounted_price=excluded.discounted_price,
+                    coupon_code=excluded.coupon_code,job_id=excluded.job_id,updated_at=excluded.updated_at''',
+                           (item['offer_id'], *(extraction.get(field) for field in
+                            ('product_name', 'original_price', 'discounted_price', 'coupon_code')),
+                            item['job_id'], now))
+            db.execute('UPDATE ai_job_items SET status=? WHERE id=?', (status, item_id))
+            return status
+
+    def ai_job_cancel_requested(self, job_id):
+        return bool(self.rows("SELECT 1 FROM ai_jobs WHERE id=? AND status IN ('cancelling','cancelled')",
+                              (job_id,)))
+
+    def cancel_ai_job(self, job_id):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('SELECT status FROM ai_jobs WHERE id=?', (job_id,)).fetchone()
+            if not job:
+                return 'missing'
+            if job['status'] == 'queued':
+                db.execute("UPDATE ai_job_items SET status='cancelled' WHERE job_id=? AND status IN ('queued','processing')",
+                           (job_id,))
+                db.execute("UPDATE ai_jobs SET status='cancelled',finished_at=? WHERE id=?",
+                           (datetime.now(timezone.utc).isoformat(timespec='seconds'), job_id))
+                return 'cancelled'
+            if job['status'] == 'running':
+                db.execute("UPDATE ai_job_items SET status='cancelled' WHERE job_id=? AND status='queued'",
+                           (job_id,))
+                db.execute("UPDATE ai_jobs SET status='cancelling' WHERE id=?", (job_id,))
+                return 'cancelling'
+            if job['status'] == 'cancelling':
+                return 'cancelling'
+            return 'finished'
+
+    def finish_ai_job(self, job_id):
+        with self.connect() as db:
+            job = db.execute('SELECT status FROM ai_jobs WHERE id=?', (job_id,)).fetchone()
+            if not job:
+                return
+            counts = {row['status']: row['n'] for row in db.execute(
+                'SELECT status,count(*) AS n FROM ai_job_items WHERE job_id=? GROUP BY status', (job_id,))}
+            if counts.get('queued') or counts.get('processing'):
+                return
+            status = ('cancelled' if job['status'] == 'cancelling' else
+                      'completed_with_errors' if counts.get('failed') else 'completed')
+            db.execute('UPDATE ai_jobs SET status=?,finished_at=? WHERE id=?',
+                       (status, datetime.now(timezone.utc).isoformat(timespec='seconds'), job_id))
+
+    def ai_jobs(self):
+        with self.connect() as db:
+            jobs = [dict(row) for row in db.execute('''SELECT j.*,
+                count(i.id) AS total,
+                sum(CASE WHEN i.status IN ('succeeded','failed','skipped','cancelled') THEN 1 ELSE 0 END) AS processed,
+                sum(CASE WHEN i.status='succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                sum(CASE WHEN i.status='failed' THEN 1 ELSE 0 END) AS failed,
+                sum(CASE WHEN i.status='skipped' THEN 1 ELSE 0 END) AS skipped,
+                sum(CASE WHEN i.status='cancelled' THEN 1 ELSE 0 END) AS cancelled
+                FROM ai_jobs j LEFT JOIN ai_job_items i ON i.job_id=j.id
+                GROUP BY j.id ORDER BY j.id DESC''')]
+            logs = db.execute('''SELECT a.*,i.message_id FROM ai_job_attempts a
+                JOIN ai_job_items i ON i.id=a.item_id ORDER BY a.id DESC''').fetchall()
+        by_job = {job['id']: [] for job in jobs}
+        for row in logs:
+            if row['job_id'] in by_job:
+                by_job[row['job_id']].append({**dict(row), 'offer_label': f"Oferta #{row['message_id']}"})
+        for job in jobs:
+            job['processed'] = job['processed'] or 0
+            job['succeeded'] = job['succeeded'] or 0
+            job['failed'] = job['failed'] or 0
+            job['skipped'] = job['skipped'] or 0
+            job['cancelled'] = job['cancelled'] or 0
+            job['logs'] = by_job[job['id']]
+        active = next((job for job in reversed(jobs) if job['status'] in ('queued', 'running', 'cancelling')), None)
+        return jobs, active
+
+    def ai_job_status(self):
+        with self.connect() as db:
+            row = db.execute('''SELECT j.id,j.status,count(i.id) AS total,
+                sum(CASE WHEN i.status IN ('succeeded','failed','skipped','cancelled') THEN 1 ELSE 0 END) AS processed,
+                sum(CASE WHEN i.status='succeeded' THEN 1 ELSE 0 END) AS succeeded,
+                sum(CASE WHEN i.status='failed' THEN 1 ELSE 0 END) AS failed,
+                sum(CASE WHEN i.status='skipped' THEN 1 ELSE 0 END) AS skipped,
+                sum(CASE WHEN i.status='cancelled' THEN 1 ELSE 0 END) AS cancelled
+                FROM ai_jobs j LEFT JOIN ai_job_items i ON i.job_id=j.id
+                WHERE j.status IN ('queued','running','cancelling') GROUP BY j.id
+                ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'cancelling' THEN 1 ELSE 2 END,j.id LIMIT 1''').fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        for key in ('processed', 'succeeded', 'failed', 'skipped', 'cancelled'):
+            result[key] = result[key] or 0
+        return result
 
     def add_rule(self, name, keywords, *, return_alerts=False):
         with self.connect() as db:
@@ -245,6 +562,9 @@ class Store:
             cards.append({**representative, 'parts': full_parts,
                 'rules': ', '.join(dict.fromkeys(p['rules'] for p in full_parts if p['rules'])),
                 'seen': all(p['seen'] for p in full_parts if p['rules'])})
+        if cards:
+            with self.connect() as db:
+                self._attach_extractions(cards, db)
         return cards, total
 
     def hide_suggestion(self, word):
@@ -294,6 +614,8 @@ class Store:
             chat = db.execute('SELECT title FROM chats WHERE id=?', (chat_id,)).fetchone()
             if not chat or (not body and not source_json):
                 return
+            previous = db.execute('SELECT id,body,grouped_id FROM offers WHERE chat_id=? AND message_id=?',
+                                  (chat_id, message_id)).fetchone()
             had_alert = False
             if report_alert:
                 had_alert = bool(db.execute('''SELECT 1 FROM offers o JOIN hits h ON h.offer_id=o.id
@@ -308,6 +630,15 @@ class Store:
                          str(grouped) if grouped is not None else None))
             offer_id = db.execute('SELECT id FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()['id']
+            current_group = str(grouped) if grouped is not None else None
+            if ((previous and (previous['body'] != (body or '') or previous['grouped_id'] != current_group))
+                    or (not previous and current_group is not None)):
+                affected = set()
+                for group in ((previous['grouped_id'] if previous else None), current_group):
+                    root = (db.execute('SELECT id FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY message_id LIMIT 1',
+                                       (chat_id, group)).fetchone() if group is not None else None)
+                    affected.add(root['id'] if root else offer_id)
+                db.executemany('DELETE FROM offer_extractions WHERE offer_id=?', [(item,) for item in affected])
             db.execute('DELETE FROM hits WHERE offer_id=?', (offer_id,))
             matched = []
             for rule in db.execute('SELECT * FROM rules').fetchall():
@@ -404,7 +735,23 @@ class Store:
             cards.append({**parts[0], 'parts': parts,
                           'rules': ', '.join(dict.fromkeys(p['rules'] for p in parts if p['rules'])),
                           'seen': all(p['seen'] for p in parts if p['rules'])})
+        self._attach_extractions(cards, db)
         return cards
+
+    @staticmethod
+    def _attach_extractions(cards, db):
+        if not cards:
+            return
+        ids = [card['id'] for card in cards]
+        found = {}
+        for row in db.execute('''SELECT * FROM offer_extractions WHERE offer_id IN (''' +
+                              ','.join('?' for _ in ids) + ')', ids):
+            extraction = {key: row[key] for key in
+                          ('product_name', 'original_price', 'discounted_price', 'coupon_code')}
+            if any(extraction.values()):
+                found[row['offer_id']] = extraction
+        for card in cards:
+            card['extraction'] = found.get(card['id'])
 
     def new_offers(self, after, q='', alerts=False):
         with self.connect() as db:

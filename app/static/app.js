@@ -675,3 +675,191 @@ selectionBar.addEventListener('click', async (event) => {
 });
 window.addEventListener('scroll', () => { if (!selectionBar.hidden && !selectingAction) updateSelectionActions(); }, true);
 window.addEventListener('resize', () => { if (!selectionBar.hidden) updateSelectionActions(); });
+
+// AI model catalog and priority controls progressively enhance the server-rendered form.
+const aiForm = document.querySelector('#ai-settings-form');
+const aiSettingsState = {dirty: false};
+if (aiForm) {
+  const orderField = aiForm.querySelector('#model-order');
+  const priority = aiForm.querySelector('#model-priority-list');
+  const priorityStatus = aiForm.querySelector('#priority-status');
+  const providerNames = {openai: 'OpenAI', openrouter: 'OpenRouter'};
+  const selectedModels = () => [...aiForm.querySelectorAll('[data-model-option] input:checked')];
+  const updateModelPickerSummary = (provider) => {
+    const count = aiForm.querySelectorAll(`input[name="models_${provider}"]:checked`).length;
+    const summary = aiForm.querySelector(`[data-model-picker-summary="${provider}"]`);
+    if (summary) summary.textContent = `${count} modelo${count === 1 ? '' : 's'} selecionado${count === 1 ? '' : 's'} · Abrir seletor`;
+  };
+  function syncPriority() {
+    const selected = selectedModels();
+    const keys = new Set(selected.map((input) => `${input.name.slice(7)}\0${input.value}`));
+    [...priority.children].forEach((item) => {
+      if (!keys.has(`${item.dataset.provider}\0${item.dataset.model}`)) item.remove();
+    });
+    selected.forEach((input) => {
+      const provider = input.name.slice(7);
+      const exists = [...priority.children].some((item) => item.dataset.provider === provider && item.dataset.model === input.value);
+      if (exists) return;
+      const item = document.createElement('li');
+      item.dataset.priorityItem = '';
+      item.dataset.provider = provider;
+      item.dataset.model = input.value;
+      const label = document.createElement('span');
+      label.textContent = `${providerNames[provider]} · ${input.value}`;
+      item.append(label);
+      for (const [direction, text] of [['up', '↑'], ['down', '↓']]) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'secondary'; button.dataset.move = direction;
+        button.setAttribute('aria-label', `Mover ${input.value} ${direction === 'up' ? 'para cima' : 'para baixo'}`);
+        button.textContent = text; item.append(button);
+      }
+      priority.append(item);
+    });
+    orderField.value = JSON.stringify([...priority.children].map((item) => ({provider: item.dataset.provider, id: item.dataset.model})));
+    [...priority.children].forEach((item, index, rows) => {
+      item.querySelector('[data-move="up"]').disabled = index === 0;
+      item.querySelector('[data-move="down"]').disabled = index === rows.length - 1;
+    });
+    priorityStatus.textContent = selected.length ? `${selected.length} modelo${selected.length === 1 ? '' : 's'} na ordem de uso.` : 'Selecione ao menos um modelo.';
+    updateModelPickerSummary('openai'); updateModelPickerSummary('openrouter');
+  }
+  aiForm.addEventListener('change', (event) => {
+    const checkbox = event.target.closest('[data-model-option] input');
+    if (!checkbox) return;
+    syncPriority();
+  });
+  priority.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-move]');
+    if (!button) return;
+    const item = button.closest('li');
+    const neighbor = button.dataset.move === 'up' ? item.previousElementSibling : item.nextElementSibling;
+    if (!neighbor) return;
+    if (button.dataset.move === 'up') priority.insertBefore(item, neighbor);
+    else priority.insertBefore(neighbor, item);
+    orderField.value = JSON.stringify([...priority.children].map((row) => ({provider: row.dataset.provider, id: row.dataset.model})));
+    [...priority.children].forEach((row, index, rows) => {
+      row.querySelector('[data-move="up"]').disabled = index === 0;
+      row.querySelector('[data-move="down"]').disabled = index === rows.length - 1;
+    });
+    priorityStatus.textContent = `${item.querySelector('span').textContent} movido ${button.dataset.move === 'up' ? 'para cima' : 'para baixo'}.`;
+    aiForm.dispatchEvent(new Event('ai-order-change'));
+    button.focus();
+  });
+  document.querySelectorAll('[data-model-filter]').forEach((filter) => filter.addEventListener('input', () => {
+    const provider = filter.dataset.modelFilter;
+    const term = filter.value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+    const rows = [...document.querySelectorAll(`[data-model-option][data-provider="${provider}"]`)];
+    rows.forEach((row) => {
+      row.hidden = !row.textContent.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').includes(term);
+    });
+    const visible = rows.filter((row) => !row.hidden).length;
+    const status = document.querySelector(`[data-model-status="${provider}"]`);
+    if (filter.value && status) status.textContent = `${visible} modelo${visible === 1 ? '' : 's'} encontrado${visible === 1 ? '' : 's'}; ${aiForm.querySelectorAll(`input[name="models_${provider}"]:checked`).length} selecionados.`;
+  }));
+  document.querySelectorAll('[data-load-models]').forEach((button) => button.addEventListener('click', async () => {
+    const provider = button.dataset.loadModels;
+    const status = document.querySelector(`[data-model-status="${provider}"]`);
+    const keyField = document.querySelector(`#${provider}-key`);
+    const label = button.textContent;
+    button.disabled = true; button.textContent = 'Carregando…';
+    status.textContent = 'Consultando catálogo…';
+    const data = new FormData();
+    data.set('csrf', aiForm.querySelector('[name=csrf]').value);
+    data.set('provider', provider);
+    data.set('api_key', keyField.value);
+    try {
+      const response = await fetch('/settings/ai/models', {method: 'POST', body: data, headers: {Accept: 'application/json'}, credentials: 'same-origin'});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível carregar os modelos.');
+      const list = document.querySelector(`.ai-provider[data-provider="${provider}"] .model-list`);
+      document.querySelector(`[data-model-picker="${provider}"]`).open = true;
+      const existing = new Map([...list.querySelectorAll('[data-model-option] input')].map((input) => [input.value, input.checked]));
+      list.querySelectorAll('[data-model-option], [data-model-empty]').forEach((item) => item.remove());
+      result.models.forEach((model) => {
+        const row = document.createElement('label'); row.className = 'check model-option'; row.dataset.modelOption = ''; row.dataset.provider = provider;
+        const input = document.createElement('input'); input.type = 'checkbox'; input.name = `models_${provider}`; input.value = model.id; input.checked = existing.get(model.id) || false;
+        const name = document.createElement('span'); name.textContent = model.name && model.name !== model.id ? `${model.name} (${model.id})` : model.id;
+        row.append(input, name); list.append(row);
+      });
+      if (!result.models.length) {
+        const empty = document.createElement('p'); empty.className = 'field-help'; empty.dataset.modelEmpty = '';
+        empty.textContent = 'Nenhum modelo disponível para esta chave.'; list.append(empty);
+      }
+      document.querySelector(`#${provider}-filter`).dispatchEvent(new Event('input'));
+      syncPriority(); status.textContent = `${result.models.length} modelos carregados.`;
+    } catch (error) { status.textContent = error.message || 'Não foi possível carregar os modelos. Tente novamente.'; }
+    finally { button.disabled = false; button.textContent = label; }
+  }));
+  syncPriority();
+  const serializeSettings = () => JSON.stringify([...new FormData(aiForm).entries()].filter(([name]) => name !== 'csrf'));
+  const savedSettings = serializeSettings();
+  const updateDirty = () => {
+    aiSettingsState.dirty = serializeSettings() !== savedSettings;
+    document.dispatchEvent(new Event('ai-settings-dirty'));
+  };
+  aiForm.addEventListener('input', updateDirty);
+  aiForm.addEventListener('change', updateDirty);
+  aiForm.addEventListener('ai-order-change', updateDirty);
+}
+
+const aiJobForm = document.querySelector('[data-job-create]');
+if (aiJobForm) {
+  const countLabel = aiJobForm.querySelector('[data-job-count]');
+  const button = aiJobForm.querySelector('button[type="submit"], button:not([type])');
+  const help = aiJobForm.querySelector('[data-unsaved-help]');
+  const updateJobChoice = () => {
+    const replace = aiJobForm.querySelector('[name="replace_existing"]:checked')?.value === 'true';
+    const count = Number(replace ? aiJobForm.dataset.countAll : aiJobForm.dataset.countMissing);
+    countLabel.textContent = replace
+      ? `${count} ofertas no feed padrão serão processadas; resultados existentes serão substituídos.`
+      : `${count} ofertas sem extração entre as ${aiJobForm.dataset.countAll} exibidas no feed padrão da Home.`;
+    aiJobForm.dataset.confirm = `Criar job para ${count} ofertas? O texto será enviado aos provedores selecionados e pode consumir créditos.`;
+    if (button) button.disabled = count === 0 || aiJobForm.dataset.ready !== 'true' || aiSettingsState.dirty;
+    if (help) help.textContent = aiSettingsState.dirty
+      ? 'Há alterações de IA não salvas. Salve a configuração antes de enfileirar para usar os modelos selecionados.'
+      : 'O job usa a configuração de IA salva. Salve qualquer alteração antes de enfileirar.';
+  };
+  aiJobForm.addEventListener('change', updateJobChoice);
+  document.addEventListener('ai-settings-dirty', updateJobChoice);
+  updateJobChoice();
+}
+
+const activeJobPanel = document.querySelector('[data-active-job]');
+if (activeJobPanel) {
+  let refreshingJobs = false;
+  const jobStatusLabels = {queued: 'Na fila', running: 'Em andamento', cancelling: 'Cancelamento solicitado', cancelled: 'Cancelado', completed: 'Concluído', completed_with_errors: 'Concluído com falhas', failed: 'Com falhas'};
+  const updateJobProgress = async () => {
+    if (refreshingJobs || document.visibilityState !== 'visible') return;
+    refreshingJobs = true;
+    try {
+      const response = await fetch('/ai-jobs/status', {headers: {Accept: 'application/json'}, credentials: 'same-origin', cache: 'no-store'});
+      if (!response.ok) throw new Error();
+      const result = await response.json();
+      const job = result.active_job;
+      if (!job || String(job.id) !== activeJobPanel.dataset.activeJob) {
+        window.location.reload();
+        return;
+      }
+      const total = Number(job.total) || 0;
+      const processed = Number(job.processed) || 0;
+      const progress = activeJobPanel.querySelector('[data-active-progress]');
+      const percent = total ? Math.round(processed / total * 100) : 0;
+      progress.max = Math.max(total, 1); progress.value = processed;
+      progress.setAttribute('aria-label', `Progresso do job: ${processed} de ${total} ofertas`);
+      activeJobPanel.querySelector('[data-active-status]').textContent = jobStatusLabels[job.status] || 'Status atualizado';
+      activeJobPanel.querySelector('[data-active-summary]').textContent = `${processed} de ${total} ofertas processadas · ${job.succeeded} concluídas · ${job.skipped} puladas · ${job.failed} com erro · ${job.cancelled} canceladas`;
+      activeJobPanel.querySelector('[data-active-percent]').textContent = `${processed} de ${total} (${percent}%)`;
+      const cancelForm = activeJobPanel.querySelector('[data-job-cancel]');
+      if (cancelForm) cancelForm.hidden = !['queued', 'running'].includes(job.status);
+      let cancelNotice = activeJobPanel.querySelector('[data-cancel-notice]');
+      if (job.status === 'cancelling' && !cancelNotice) {
+        cancelNotice = document.createElement('p'); cancelNotice.className = 'field-help'; cancelNotice.dataset.cancelNotice = ''; cancelNotice.setAttribute('role', 'status');
+        cancelNotice.textContent = 'Cancelamento solicitado. Aguardando a solicitação atual terminar.';
+        activeJobPanel.insertBefore(cancelNotice, activeJobPanel.querySelector('[data-active-progress]'));
+      }
+    } catch {
+      activeJobPanel.querySelector('[data-active-summary]').textContent = 'Não foi possível atualizar agora. Tentando novamente…';
+    } finally { refreshingJobs = false; }
+  };
+  window.setInterval(updateJobProgress, 5000);
+}
