@@ -111,7 +111,7 @@ Release `v0.3.3`: commit `f761e26`; push workflow `42282811151` e release workfl
 
 ## Layout masonry dos cards — 2026-11-06
 
-A Home com cópia temporária do backup foi validada no Chromium: 29 cards em quatro colunas em viewport de 1365 px; em 390 px, uma coluna e sem overflow horizontal. Capturas: `/tmp/murktelegot-desktop-fixed.png` e `/tmp/murktelegot-mobile-fixed.png`. A regra inicial de CSS Columns foi rejeitada pelo navegador; após corrigir para `columns: 250px`, o fluxo e o layout ficaram corretos.
+A Home com cópia temporária do backup foi validada no Chromium: 29 cards em quatro colunas em viewport de 1365 px; em 390 px, uma coluna e sem overflow horizontal. As capturas foram inspecionadas durante a validação; arquivos temporários foram removidos depois. A regra inicial de CSS Columns foi rejeitada pelo navegador; após corrigir para `columns: 250px`, o fluxo e o layout ficaram corretos.
 
 125 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. `bun test` da appstore passou com 462 testes. Nenhum banco pessoal foi usado; o servidor local foi encerrado.
 
