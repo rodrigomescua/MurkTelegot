@@ -108,3 +108,11 @@ Release `v0.3.2`: commit `7b801e5`; CI do push `42248746622` e workflow da relea
 125 testes `unittest` passaram; incluem limpeza separada de jobs terminais, cancelamento ativo e remoção após recuperação de reinício, migração com snapshot do banco e proteção de autenticação/CSRF. Chromium em 390 px e 1365 px verificou os dois botões, confirmação, limpeza, ausência de overflow e erros JavaScript. `node --check app/static/app.js`, `bash -n run-dev.sh`, `compileall` e `git diff --check` passaram. Foram usados banco temporário e chave fictícia; sem chamadas reais a provedores. Cancelar localmente ainda pode deixar o provedor concluir e cobrar.
 
 Release `v0.3.3`: commit `f761e26`; push workflow `42282811151` e release workflow `42282893403` aprovados. GHCR confirmou a tag `0.3.3`, digest `sha256:f2c9f19a585d845949a63b4b93d73fab9faeb008804a5d1bf0b17cdcbf496e77`, plataforma `linux/amd64`. Appstore atualizado no commit `9ce897f`, `tipi_version` 27; `bun test` passou com 462 testes e workflow `42283139996` aprovado. O push bypassou regras que exigiam PR e status prévio; o workflow após o push passou. A instância Runtipi não foi atualizada.
+
+## Layout masonry dos cards — 2026-11-06
+
+A Home com cópia temporária do backup foi validada no Chromium: 29 cards em quatro colunas em viewport de 1365 px; em 390 px, uma coluna e sem overflow horizontal. Capturas: `/tmp/murktelegot-desktop-fixed.png` e `/tmp/murktelegot-mobile-fixed.png`. A regra inicial de CSS Columns foi rejeitada pelo navegador; após corrigir para `columns: 250px`, o fluxo e o layout ficaram corretos.
+
+125 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. `bun test` da appstore passou com 462 testes. Nenhum banco pessoal foi usado; o servidor local foi encerrado.
+
+Release `v0.3.4`: commit `60d73bb`; push workflow `42289771505` e workflow de release `42289792145` aprovados. GHCR confirmou a tag `0.3.4`, digest `sha256:550151363df7ab98631fe6345ffaef1f6d8661de3a94dc35f31bdf8562e31aa5`, índice OCI publicado para AMD64. Appstore atualizada no commit `14c0b2e`, `tipi_version` 28; 462 testes e workflow `42290036751` aprovados. O push bypassou regras que exigiam PR e status prévio. A instância Runtipi não foi atualizada.
