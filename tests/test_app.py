@@ -291,6 +291,48 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(main.store.ai_jobs()[0][0]['status'], 'cancelled')
 
+    def test_ai_job_cleanup_actions_keep_auth_csrf_and_wait_for_active_worker(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100126, 'Grupo'))
+        main.store.ingest(-100126, 1, 'Oferta teste', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        completed_id, _ = main.store.enqueue_ai_job()
+        main.store.cancel_ai_job(completed_id)
+        page = self.client.get('/ai-jobs', cookies=self.auth)
+        self.assertIn('Limpar concluídos', page.text)
+        self.assertIn('Cancelar e limpar tudo', page.text)
+        self.assertIn('data-confirm=', page.text)
+        queued_id, _ = main.store.enqueue_ai_job()
+        response = self.client.post('/ai-jobs/clear-completed', cookies=self.auth,
+                                    data={'csrf': main.csrf_token}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(main.store.rows('SELECT id FROM ai_jobs'), [{'id': queued_id}])
+        self.assertEqual(self.client.post('/ai-jobs/clear-all', cookies=self.auth,
+                                          data={'csrf': 'bad'}).status_code, 403)
+        self.assertEqual(self.client.post('/ai-jobs/clear-all', cookies=self.auth,
+                                          data={'csrf': main.csrf_token}, follow_redirects=False).status_code, 303)
+        self.assertEqual(main.store.rows('SELECT id FROM ai_jobs'), [])
+
+        active_id, _ = main.store.enqueue_ai_job(True)
+        job = main.store.claim_ai_job()
+        started = asyncio.Event()
+
+        async def hanging_extract(*_args):
+            started.set()
+            await asyncio.Event().wait()
+
+        async def run():
+            with patch.object(main, 'extract_ai', side_effect=hanging_extract):
+                worker = asyncio.create_task(main.process_ai_job(job))
+                await started.wait()
+                response = await main.clear_all_ai_jobs()
+                self.assertEqual(response.status_code, 303)
+                await asyncio.wait_for(worker, timeout=1)
+
+        asyncio.run(run())
+        self.assertEqual(main.store.rows('SELECT id FROM ai_jobs'), [])
+        self.assertEqual(main.store.rows('SELECT * FROM ai_job_items'), [])
+        self.assertEqual(main.store.rows('SELECT * FROM ai_job_attempts'), [])
+
     def test_running_ai_job_cancellation_discards_call_result_and_stops_batch(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
         for message_id in (1, 2):

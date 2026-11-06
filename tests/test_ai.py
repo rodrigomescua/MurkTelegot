@@ -93,6 +93,42 @@ class AIStoreTests(unittest.TestCase):
         tables = {row['name'] for row in migrated.rows("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({'offer_extractions', 'ai_jobs', 'ai_job_items', 'ai_job_attempts'} <= tables)
 
+    def test_existing_ai_jobs_table_adds_cleanup_flag_after_backup(self):
+        path = Path(self.tmp.name) / 'legacy-ai-jobs.db'
+        with sqlite3.connect(path) as db:
+            db.execute('''CREATE TABLE ai_jobs (
+                id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
+                models_json TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT)''')
+            db.execute("INSERT INTO ai_jobs VALUES(1,'completed',0,'[]','now',NULL,'now')")
+
+        migrated = Store(path)
+        columns = {row['name'] for row in migrated.rows('PRAGMA table_info(ai_jobs)')}
+        self.assertIn('clear_requested', columns)
+        self.assertEqual(migrated.rows('SELECT id,clear_requested FROM ai_jobs'),
+                         [{'id': 1, 'clear_requested': 0}])
+        backup = sqlite3.connect(str(path) + '.before-ai-job-cleanup.db')
+        try:
+            old_columns = {row[1] for row in backup.execute('PRAGMA table_info(ai_jobs)')}
+            self.assertNotIn('clear_requested', old_columns)
+            self.assertEqual(backup.execute('SELECT id,status FROM ai_jobs').fetchone(), (1, 'completed'))
+        finally:
+            backup.close()
+
+    def test_clear_all_jobs_are_removed_after_restart_recovery(self):
+        self.store.ingest(-1001, 1, 'Oferta ativa', '2026-11-01', None)
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        self.store.record_ai_attempt(job_id, item['id'], 'openai', 'a', 'cancelled', 'Cancelado', 1)
+        self.assertEqual(self.store.cancel_and_clear_ai_jobs(), [job_id])
+
+        recovered = Store(self.store.path)
+        recovered.recover_ai_jobs()
+        self.assertEqual(recovered.rows('SELECT id FROM ai_jobs'), [])
+        self.assertEqual(recovered.rows('SELECT id FROM ai_job_items'), [])
+        self.assertEqual(recovered.rows('SELECT id FROM ai_job_attempts'), [])
+
     def test_job_selection_matches_home_feed_and_excludes_existing_extractions(self):
         self.store.add_ignored('blocked')
         for message_id in range(1, 106):

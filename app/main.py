@@ -372,6 +372,22 @@ async def ai_jobs_page(request: Request, notice: str = ''):
     })
 
 
+@app.post('/ai-jobs/clear-completed', dependencies=[Depends(authenticate), Depends(csrf)])
+async def clear_completed_ai_jobs():
+    await asyncio.to_thread(store.clear_completed_ai_jobs)
+    return RedirectResponse('/ai-jobs?notice=Hist%C3%B3rico+conclu%C3%ADdo+limpo.', status_code=303)
+
+
+@app.post('/ai-jobs/clear-all', dependencies=[Depends(authenticate), Depends(csrf)])
+async def clear_all_ai_jobs():
+    active = await asyncio.to_thread(store.cancel_and_clear_ai_jobs)
+    for job_id in active:
+        if request_task := ai_requests.get(job_id):
+            request_task.cancel()
+    notice = 'Cancelamento solicitado; o histórico será limpo quando os jobs em andamento encerrarem.'
+    return RedirectResponse('/ai-jobs?' + urlencode({'notice': notice}), status_code=303)
+
+
 @app.get('/ai-jobs/status', dependencies=[Depends(authenticate)])
 async def ai_jobs_status():
     return {'active_job': store.ai_job_status()}

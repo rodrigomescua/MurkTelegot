@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Jobs de IA</h1>
 {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+<div class="toolbar"><form method="post" action="/ai-jobs/clear-completed"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Limpar concluídos</button></form><form method="post" action="/ai-jobs/clear-all" data-confirm="Cancelar jobs na fila e em andamento e apagar todo o histórico? Uma chamada ativa será interrompida localmente; o provedor ainda pode concluir o processamento ou cobrar."><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancelar e limpar tudo</button></form></div>
 {% if active_job %}
 <section class="job-card active-job" aria-labelledby="active-job-title" data-active-job="{{ active_job.id }}">
 <h2 id="active-job-title">{{ 'Cancelando job' if active_job.status == 'cancelling' else 'Job em andamento' if active_job.status == 'running' else 'Próximo job na fila' }}</h2>

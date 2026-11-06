@@ -102,7 +102,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS ai_jobs (
                     id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
                     models_json TEXT NOT NULL, created_at TEXT NOT NULL,
-                    started_at TEXT, finished_at TEXT);
+                    started_at TEXT, finished_at TEXT, clear_requested INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS ai_job_items (
                     id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
                     position INTEGER NOT NULL, offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
@@ -119,6 +119,21 @@ class Store:
                 for name in ('source_json', 'grouped_id', 'deleted_at'):
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
+            job_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_jobs)')}
+            if 'clear_requested' not in job_columns:
+                backup = Path(str(path) + '.before-ai-job-cleanup.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                db.execute('ALTER TABLE ai_jobs ADD COLUMN clear_requested INTEGER NOT NULL DEFAULT 0')
             db.execute('''DELETE FROM ignored_keywords
                           WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
@@ -273,6 +288,7 @@ class Store:
             db.execute("UPDATE ai_jobs SET status='cancelled',finished_at=? WHERE status='cancelling'", (finished,))
             db.execute("UPDATE ai_job_items SET status='queued' WHERE status='processing'")
             db.execute("UPDATE ai_jobs SET status='queued',started_at=NULL WHERE status='running'")
+            db.execute('DELETE FROM ai_jobs WHERE clear_requested=1')
 
     def claim_ai_job(self):
         with self.connect() as db:
@@ -401,6 +417,26 @@ class Store:
                       'completed_with_errors' if counts.get('failed') else 'completed')
             db.execute('UPDATE ai_jobs SET status=?,finished_at=? WHERE id=?',
                        (status, datetime.now(timezone.utc).isoformat(timespec='seconds'), job_id))
+            db.execute('DELETE FROM ai_jobs WHERE id=? AND clear_requested=1', (job_id,))
+
+    def clear_completed_ai_jobs(self):
+        with self.connect() as db:
+            db.execute("DELETE FROM ai_jobs WHERE status IN ('completed','completed_with_errors','failed','cancelled')")
+
+    def cancel_and_clear_ai_jobs(self):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            active = [row['id'] for row in db.execute(
+                "SELECT id FROM ai_jobs WHERE status IN ('running','cancelling')")]
+            db.execute("UPDATE ai_job_items SET status='cancelled' WHERE job_id IN "
+                       "(SELECT id FROM ai_jobs WHERE status='queued') AND status IN ('queued','processing')")
+            db.execute("UPDATE ai_jobs SET status='cancelled',finished_at=? WHERE status='queued'",
+                       (datetime.now(timezone.utc).isoformat(timespec='seconds'),))
+            db.execute("UPDATE ai_job_items SET status='cancelled' WHERE job_id IN "
+                       "(SELECT id FROM ai_jobs WHERE status IN ('running','cancelling')) AND status='queued'")
+            db.execute("UPDATE ai_jobs SET status='cancelling',clear_requested=1 WHERE status IN ('running','cancelling')")
+            db.execute("DELETE FROM ai_jobs WHERE status IN ('completed','completed_with_errors','failed','cancelled')")
+            return active
 
     def ai_jobs(self):
         with self.connect() as db:

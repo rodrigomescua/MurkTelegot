@@ -15,6 +15,8 @@ A extração considera todas as mensagens do álbum e retorna somente título do
 
 Jobs na fila ou em andamento podem ser cancelados com autenticação e CSRF. Um job na fila cancela imediatamente. No lote em andamento, cancelar a tarefa HTTP assíncrona fecha a conexão local, descarta a resposta e cancela as ofertas restantes. A conexão local encerrada não garante que o provedor interrompa a geração ou deixe de cobrar.
 
+A página de jobs permite apagar apenas jobs terminais ou cancelar jobs e limpar todo o histórico. A ação total marca o job ativo para exclusão após o encerramento do worker; se o processo reiniciar antes, a recuperação conclui a limpeza. Itens e tentativas são removidos pela cascata das chaves estrangeiras. O novo marcador `clear_requested` é adicionado com valor padrão e cria snapshot do banco antes da migração.
+
 ## Consequências
 
 Ofertas novas podem gerar consumo de créditos automaticamente quando há provedor configurado. O texto integral enviado ao provedor pode conter dados privados; a interface avisa antes do processamento manual. Cancelamento interrompe a conexão local, mas o provedor pode continuar e cobrar. Chaves ficam sem criptografia no SQLite do volume; não são renderizadas nem incluídas em logs, então volume e backups precisam ser protegidos. Bancos antigos podem manter uma coluna `description` sem uso, preservada para evitar rebuild destrutivo; extrator e cards não a leem nem exibem. Integração real e tarifas não foram verificadas. O worker pressupõe uma única instância conforme o contrato de implantação.
