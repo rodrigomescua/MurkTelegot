@@ -142,3 +142,9 @@ Release `v0.5.1`: commit `2a0267c`; workflow `42348091172` aprovou testes e publ
 136 testes `unittest` passaram; `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não foi feita validação visual, conforme pedido do usuário. O servidor local em `192.168.0.10:8000` foi encerrado.
 
 Release `v0.5.2`: commit `6b48e08`; workflow de push `42351443739` e workflow da release `42351509661` aprovados. GHCR confirmou a tag `0.5.2` como índice OCI `linux/amd64`, digest `sha256:8b7282b4300521d0ac53737b66ce05b9beae3551cd15fe7471bba1a33178b815`. Appstore atualizado no commit `504687a`, versão `0.5.2`, `tipi_version` 32; `bun test` passou com 462 testes e workflow `42351638390` aprovado. O push do appstore bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
+
+## Release 0.5.3 e grid cronológica — 2026-11-07
+
+136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Chromium com cards de alturas diferentes confirmou ordem visual por linha e ausência de overflow em 1365 px, 390 px e 320 px.
+
+Release `v0.5.3`: commit `dc83318`; workflow de push `42353373869` e workflow da release `42353384683` aprovados. GHCR confirmou a tag `0.5.3` como índice contendo `linux/amd64`, digest `sha256:f7242aa2a9382d50bc0424c230efeb72a5d2c9eb3596a8399bff9e786cc33bef`. Appstore atualizado no commit `e6d44c6`, versão `0.5.3`, `tipi_version` 33; 462 testes e workflow `42353407376` aprovados. Catálogo atualizado antes da conclusão da imagem por autorização explícita do usuário. A instância Runtipi não foi atualizada e nenhum processo local ativo foi encontrado.
