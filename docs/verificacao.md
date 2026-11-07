@@ -154,3 +154,5 @@ Release `v0.5.3`: commit `dc83318`; workflow de push `42353373869` e workflow da
 139 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, compilação dos módulos alterados e `git diff --check` passaram. O roteiro Chromium atualizado passou com celular (navegação para Home filtrada, sem modal de termo, com e sem JavaScript) e desktop (exclusão/desfazer).
 
 Com um alerta sintético em Chromium, a grid desktop em 1365 px manteve o card em 297 px, equivalente a uma coluna; em 390 px, a única coluna disponível ficou com 308 px. As capturas desktop e móvel foram inspecionadas. Sem aparelho físico ou integração real com Telegram.
+
+Publicação: release `v0.5.4` no commit `f4b206f`; workflow `42355305879` aprovado. O manifesto GHCR confirmou a tag exata `0.5.4`, incluindo `linux/amd64`, digest `sha256:f5a9a3c842bff6b57079e257eda53e4a48b02ff20385b5a957b4d1c4d673ae60`. Catálogo Runtipi atualizado durante a publicação, conforme autorização, no commit `d6eeaf7` (`tipi_version` 34); workflow `42355317304` aprovado. A instância Runtipi não foi atualizada.
