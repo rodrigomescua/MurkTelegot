@@ -4,24 +4,25 @@ const primaryNavigation = document.querySelector('.primary-navigation');
 if (primaryNavigation) {
   const toggle = primaryNavigation.querySelector('.nav-toggle');
   const menu = primaryNavigation.querySelector('#main-nav');
-  const mobileNavigation = window.matchMedia('(max-width: 850px)');
+  const compactNavigation = window.matchMedia('(max-width: 1024px)');
   const setNavigation = (expanded) => {
     toggle.setAttribute('aria-expanded', String(expanded));
-    menu.hidden = mobileNavigation.matches && !expanded;
+    toggle.setAttribute('aria-label', expanded ? 'Fechar navegação' : 'Abrir navegação');
+    menu.hidden = compactNavigation.matches && !expanded;
   };
   primaryNavigation.classList.add('nav-enhanced');
-  setNavigation(!mobileNavigation.matches);
+  setNavigation(!compactNavigation.matches);
   toggle.addEventListener('click', () => setNavigation(toggle.getAttribute('aria-expanded') !== 'true'));
   menu.addEventListener('click', (event) => {
-    if (mobileNavigation.matches && event.target.closest('a')) setNavigation(false);
+    if (compactNavigation.matches && event.target.closest('a')) setNavigation(false);
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && mobileNavigation.matches && toggle.getAttribute('aria-expanded') === 'true') {
+    if (event.key === 'Escape' && compactNavigation.matches && toggle.getAttribute('aria-expanded') === 'true') {
       setNavigation(false);
       toggle.focus();
     }
   });
-  mobileNavigation.addEventListener('change', () => setNavigation(!mobileNavigation.matches));
+  compactNavigation.addEventListener('change', () => setNavigation(!compactNavigation.matches));
 }
 
 function updateUnreadCounter(value) {

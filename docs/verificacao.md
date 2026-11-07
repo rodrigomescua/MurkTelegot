@@ -129,3 +129,8 @@ O Chromium do sistema validou Home e Configurações em 390 px e 1365 px com dad
 136 testes `unittest` passaram com armazenamento temporário. `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. A validação Chromium registrada para esta implementação cobriu 390 px, 768 px e 1365 px; `tests/browser_selection.py` passou no Chromium móvel. Não houve aparelho físico nem integração real com Telegram/provedores.
 
 Release `v0.5.0`: commit `550fdf6`; workflows de push `42345739262` e release `42345750969` aprovados. GHCR confirmou `0.5.0` como índice OCI para `linux/amd64`, digest `sha256:ebb3f83e940bd6caf6e424d17cadba4bbcce8fc6e2a23a16072d9816fa2d01cd`. Appstore Runtipi atualizado no commit `4c3590e`, `tipi_version` 30; `bun test` passou com 462 testes e workflow `42345863034` aprovado. O push do appstore bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
+
+
+## Redesenho da navbar — 2026-11-07
+
+A navbar sticky foi verificada no Chromium em 1365 px (grade expandida), 768 px (painel hambúrguer em duas colunas) e 390 px (painel vertical). O ícone permaneceu visível ao rolar; abrir/fechar, Escape e devolução de foco passaram. Sem JavaScript, os links permanecem disponíveis em coluna no celular, sem overflow. Os 136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não houve commit, publicação, atualização da instância nem teste em aparelho físico.
