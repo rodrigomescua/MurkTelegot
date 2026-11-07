@@ -709,7 +709,8 @@ class Store:
             for term, word in terms.items():
                 examples.setdefault(term, word)
         return [{'word': examples[term], 'count': count} for term, count in
-                sorted(counts.items(), key=lambda item: (-item[1], item[0])) if count >= 2]
+                sorted(counts.items(), key=lambda item: (-item[1], -len(examples[item[0]].split()),
+                                                        -len(examples[item[0]]), item[0])) if count >= 2]
 
     def term_offers(self, word, page=1, per_page=20):
         """Return matching visible offer cards, counting albums once."""

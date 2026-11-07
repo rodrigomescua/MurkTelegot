@@ -148,3 +148,9 @@ Release `v0.5.2`: commit `6b48e08`; workflow de push `42351443739` e workflow da
 136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Chromium com cards de alturas diferentes confirmou ordem visual por linha e ausência de overflow em 1365 px, 390 px e 320 px.
 
 Release `v0.5.3`: commit `dc83318`; workflow de push `42353373869` e workflow da release `42353384683` aprovados. GHCR confirmou a tag `0.5.3` como índice contendo `linux/amd64`, digest `sha256:f7242aa2a9382d50bc0424c230efeb72a5d2c9eb3596a8399bff9e786cc33bef`. Appstore atualizado no commit `e6d44c6`, versão `0.5.3`, `tipi_version` 33; 462 testes e workflow `42353407376` aprovados. Catálogo atualizado antes da conclusão da imagem por autorização explícita do usuário. A instância Runtipi não foi atualizada e nenhum processo local ativo foi encontrado.
+
+## Release 0.5.4 — 2026-11-07
+
+139 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, compilação dos módulos alterados e `git diff --check` passaram. O roteiro Chromium atualizado passou com celular (navegação para Home filtrada, sem modal de termo, com e sem JavaScript) e desktop (exclusão/desfazer).
+
+Com um alerta sintético em Chromium, a grid desktop em 1365 px manteve o card em 297 px, equivalente a uma coluna; em 390 px, a única coluna disponível ficou com 308 px. As capturas desktop e móvel foram inspecionadas. Sem aparelho físico ou integração real com Telegram.

@@ -38,6 +38,31 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertNotIn('https', counts)
         self.assertNotIn('de', counts)
 
+    def test_sorts_terms_by_frequency_word_count_then_character_count(self):
+        for number in (1, 2):
+            self.add(number, 'produto novo especial produto novinho')
+        self.add(3, 'produto novo especial')
+        terms = self.store.frequent_terms()
+        positions = {term['word']: index for index, term in enumerate(terms)}
+        counts = {term['word']: term['count'] for term in terms}
+        self.assertGreater(counts['produto novo especial'], counts['produto novinho'])
+        self.assertLess(positions['produto novo especial'], positions['produto novinho'])
+
+    def test_more_words_precede_fewer_words_when_frequency_is_equal(self):
+        for number in (1, 2):
+            self.add(number, 'produto novo especial produto novinho')
+        terms = self.store.frequent_terms()
+        positions = {term['word']: index for index, term in enumerate(terms)}
+        self.assertLess(positions['produto novo especial'], positions['produto novinho'])
+        self.assertLess(positions['produto novinho'], positions['especial'])
+
+    def test_longer_phrase_precedes_shorter_phrase_with_same_frequency_and_word_count(self):
+        for number in (1, 2):
+            self.add(number, 'casa azul grande casa azul maior')
+        terms = self.store.frequent_terms()
+        positions = {term['word']: index for index, term in enumerate(terms)}
+        self.assertLess(positions['casa azul grande'], positions['casa azul maior'])
+
     def test_extractions_replace_original_terms_and_empty_names_suppress_them(self):
         plain = self.add(1, 'Cafeteira original')
         unnamed = self.add(2, 'Cafeteira original')

@@ -192,17 +192,8 @@ offerModal.innerHTML = '<div class="modal-heading"><h2 id="offer-modal-title"></
 document.body.append(offerModal);
 let modalDetail;
 let modalSummary;
-let termOffersDialog;
-let termOffersReturn = false;
-let termOffersFocus;
-let refreshTermOffers = () => Promise.resolve(false);
 function showOffer(detail) {
   if (offerModal.open) return;
-  if (termOffersDialog?.open) {
-    termOffersReturn = true;
-    termOffersFocus = detail.querySelector('.offer-summary');
-    termOffersDialog.close();
-  }
   modalDetail = detail;
   modalSummary = detail.querySelector('.offer-summary');
   offerModal.querySelector('#offer-modal-title').textContent = detail.querySelector('.meta strong').textContent;
@@ -215,17 +206,11 @@ offerModal.addEventListener('close', () => {
   const content = offerModal.querySelector('.offer-expanded');
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
   modalDetail.append(content);
-  if (termOffersReturn && termOffersDialog) {
-    termOffersReturn = false;
-    termOffersDialog.showModal();
-    if (termOffersFocus?.isConnected) termOffersFocus.focus();
-    termOffersFocus = null;
-  } else if (modalSummary.isConnected) modalSummary.focus();
+  if (modalSummary.isConnected) modalSummary.focus();
   const status = document.querySelector('#action-status');
   if (offerModal.contains(status)) document.querySelector('main').prepend(status);
 });
 
-const termsPage = document.querySelector('#terms-content');
 async function handleOfferCardSubmit(event) {
   const form = event.target;
   const action = form.matches('[data-mark-seen]') ? 'seen' : form.matches('[data-delete-offer]') ? 'delete' : null;
@@ -264,88 +249,11 @@ async function handleOfferCardSubmit(event) {
     }
   } catch (error) {
     const message = error.message || 'Não foi possível confirmar a operação. Tente novamente.';
-    const termStatus = document.querySelector('.term-offers-modal .term-offers-status');
-    if (termStatus && card.closest('.term-offers-body')) {
-      termStatus.hidden = false;
-      termStatus.textContent = message;
-    } else toast(message, true);
+    toast(message, true);
   } finally {
     delete form.dataset.busy;
     button.disabled = false;
   }
-}
-if (termsPage) {
-  termOffersDialog = document.createElement('dialog');
-  termOffersDialog.className = 'offer-modal term-offers-modal';
-  termOffersDialog.setAttribute('aria-labelledby', 'term-offers-title');
-  termOffersDialog.innerHTML = '<div class="modal-heading"><h2 id="term-offers-title"></h2><button type="button" class="secondary modal-close term-offers-close">Fechar ✕</button></div><p class="term-offers-status" role="status" aria-live="polite" hidden></p><div class="term-offers-body"></div>';
-  document.body.append(termOffersDialog);
-  const termTitle = termOffersDialog.querySelector('#term-offers-title');
-  const termBody = termOffersDialog.querySelector('.term-offers-body');
-  const termStatus = termOffersDialog.querySelector('.term-offers-status');
-  let termTrigger;
-  let termRequest = 0;
-  let termCurrentUrl;
-  termOffersDialog.querySelector('.term-offers-close').addEventListener('click', () => termOffersDialog.close());
-  termOffersDialog.addEventListener('close', () => {
-    if (!termOffersReturn) {
-      if (termTrigger?.isConnected) termTrigger.focus();
-      else document.querySelector('#terms-title')?.focus();
-    }
-    const status = document.querySelector('#action-status');
-    if (termOffersDialog.contains(status)) document.querySelector('main').prepend(status);
-  });
-  async function loadTermOffers(url, initial = false) {
-    const request = ++termRequest;
-    termCurrentUrl = url;
-    termStatus.hidden = false;
-    termStatus.textContent = 'Carregando ofertas…';
-    if (initial) termBody.replaceChildren();
-    try {
-      const response = await fetch(url, {credentials: 'same-origin'});
-      if (!response.ok || response.redirected) throw new Error();
-      const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
-      const source = doc.querySelector('#term-offers-content');
-      const heading = doc.querySelector('main h1');
-      if (!source || !heading) throw new Error();
-      if (request !== termRequest) return false;
-      termBody.replaceChildren(...source.childNodes);
-      termTitle.textContent = heading.textContent;
-      termStatus.hidden = true;
-      formatTimes(termBody);
-      checkCovers(termBody);
-      return true;
-    } catch {
-      if (request !== termRequest) return false;
-      termStatus.hidden = false;
-      termStatus.textContent = 'Não foi possível carregar as ofertas. Tente novamente.';
-      if (initial) termBody.innerHTML = '<button type="button" class="secondary term-offers-retry">Tentar novamente</button>';
-      return false;
-    }
-  }
-  refreshTermOffers = () => termOffersDialog.open ? loadTermOffers(termCurrentUrl) : Promise.resolve(false);
-  document.addEventListener('click', (event) => {
-    const link = event.target.closest('[data-term-offers]');
-    if (!link || !termsPage.contains(link)) return;
-    if (!termOffersDialog.showModal) return;
-    event.preventDefault();
-    termTrigger = link;
-    termTitle.textContent = link.closest('li')?.querySelector('.term-label strong')?.textContent || '';
-    termOffersDialog.showModal();
-    loadTermOffers(link.href, true);
-  });
-  termOffersDialog.addEventListener('click', (event) => {
-    if (event.target.closest('.term-offers-retry')) {
-      loadTermOffers(termTrigger.href, true);
-      return;
-    }
-    const link = event.target.closest('.terms-pagination a');
-    if (!link) return;
-    event.preventDefault();
-    loadTermOffers(link.href);
-    termOffersDialog.querySelector('.modal-heading').scrollIntoView({block: 'nearest'});
-  });
-  termBody.addEventListener('submit', handleOfferCardSubmit);
 }
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
@@ -716,7 +624,6 @@ selectionBar.addEventListener('click', async (event) => {
     if (action === 'ignore') {
       await updateIgnoredList();
       await refreshTerms();
-      await refreshTermOffers();
       document.querySelector('#refresh-feed')?.click();
     } else if (document.querySelector('#rules-list')) {
       const response = await fetch('/rules-page', {credentials: 'same-origin'});
