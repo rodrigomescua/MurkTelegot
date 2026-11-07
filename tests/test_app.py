@@ -226,10 +226,11 @@ class WebTests(unittest.TestCase):
         self.assertEqual(bad.status_code, 403)
         response = self.client.post('/settings/ai', cookies=self.auth, data={
             'csrf': main.csrf_token, 'openai_key': 'private-key', 'models_openai': ['gpt-mini'],
-            'model_order': '[{"provider":"openai","id":"gpt-mini"}]',
+            'model_order': '[{"provider":"openai","id":"gpt-mini"}]', 'value': '3',
         }, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(main.store.ai_api_key('openai'), 'private-key')
+        self.assertEqual(main.store.ai_parallelism(), 3)
         page = self.client.get('/settings', cookies=self.auth)
         self.assertNotIn('private-key', page.text)
         self.assertIn('Chave configurada', page.text)

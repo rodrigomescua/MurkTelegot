@@ -451,8 +451,8 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
                            model_order: str = Form('', max_length=100_000),
                            value: int | None = Form(None)):
     try:
-        if value is not None and not 1 <= value <= store.MAX_AI_PARALLELISM:
-            raise ValueError(f'A quantidade de jobs simultâneos deve ser um número entre 1 e {store.MAX_AI_PARALLELISM}.')
+        if value is not None and not 1 <= value <= MAX_AI_PARALLELISM:
+            raise ValueError(f'A quantidade de jobs simultâneos deve ser um número entre 1 e {MAX_AI_PARALLELISM}.')
         submitted_order = json.loads(model_order) if model_order else []
         selected = {
             'openai': [model for model in models_openai if model],
