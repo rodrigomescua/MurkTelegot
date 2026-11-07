@@ -2,15 +2,16 @@
 
 const primaryNavigation = document.querySelector('.primary-navigation');
 if (primaryNavigation) {
-  const toggle = primaryNavigation.querySelector('.nav-toggle');
+  const toggle = document.querySelector('.nav-toggle');
   const menu = primaryNavigation.querySelector('#main-nav');
-  const compactNavigation = window.matchMedia('(max-width: 1024px)');
+  const compactNavigation = window.matchMedia('(max-width: 850px)');
   const setNavigation = (expanded) => {
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.setAttribute('aria-label', expanded ? 'Fechar navegação' : 'Abrir navegação');
     menu.hidden = compactNavigation.matches && !expanded;
   };
   primaryNavigation.classList.add('nav-enhanced');
+  document.querySelector('header').classList.add('navigation-enhanced');
   setNavigation(!compactNavigation.matches);
   toggle.addEventListener('click', () => setNavigation(toggle.getAttribute('aria-expanded') !== 'true'));
   menu.addEventListener('click', (event) => {
@@ -409,7 +410,6 @@ if (feed) {
   let generation = 0;
   const status = document.querySelector('#new-offers-status');
   const updateButton = document.querySelector('#new-offers');
-  const refresh = document.querySelector('#refresh-feed');
   const query = new URLSearchParams({q: feed.dataset.q, alerts: feed.dataset.alerts});
   async function poll() {
     const current = generation;
@@ -439,7 +439,6 @@ if (feed) {
     const counter = document.querySelector('#alert-counter');
     counter.innerHTML = doc.querySelector('#alert-counter').innerHTML;
     updateUnreadCounter(Number(counter.querySelector('strong').textContent));
-    document.querySelector('#feed-nav').innerHTML = doc.querySelector('#feed-nav').innerHTML;
     status.hidden = true;
     formatTimes(feed);
     checkCovers(feed);
@@ -450,9 +449,7 @@ if (feed) {
     applyPage(doc);
     return doc;
   }
-  document.querySelector('#feed-nav').addEventListener('click', async (event) => {
-    if (!event.target.closest('#refresh-feed')) return;
-    event.preventDefault();
+  async function refreshFeed() {
     if (busy) return;
     busy = true;
     try {
@@ -460,8 +457,8 @@ if (feed) {
       await poll();
     } catch { toast('Não foi possível atualizar a lista. Tente novamente.', true); }
     finally { busy = false; }
-  });
-  updateButton.addEventListener('click', () => refresh.click());
+  }
+  updateButton.addEventListener('click', refreshFeed);
   feed.addEventListener('submit', handleOfferCardSubmit);
   setInterval(poll, 30000);
 }

@@ -28,15 +28,9 @@
 <p class="field-help" data-model-status="{{ provider }}" role="status" aria-live="polite"></p>
 </div>{% endfor %}
 </div>
-<div class="model-priority"><h3>Ordem de uso</h3><p class="field-help">Modelos marcados serão tentados nesta ordem. Selecione modelos acima e use os botões para ajustar.</p><ol id="model-priority-list">{% for item in ai_config.model_order %}<li data-priority-item data-provider="{{ item.provider }}" data-model="{{ item.id }}"><span>{{ 'OpenAI' if item.provider == 'openai' else 'OpenRouter' }} · {{ item.id }}</span><button type="button" class="secondary" data-move="up" aria-label="Mover {{ item.id }} para cima">↑</button><button type="button" class="secondary" data-move="down" aria-label="Mover {{ item.id }} para baixo">↓</button></li>{% endfor %}</ol><p id="priority-status" class="field-help" role="status" aria-live="polite"></p></div>
+<div class="model-priority"><h3>Ordem de uso</h3><p class="field-help">Modelos marcados serão tentados nesta ordem. Selecione modelos acima e use os botões para ajustar.</p><ol id="model-priority-list">{% for item in ai_config.model_order %}<li data-priority-item data-provider="{{ item.provider }}" data-model="{{ item.id }}"><span>{{ 'OpenAI' if item.provider == 'openai' else 'OpenRouter' }} · {{ item.id }}</span><button type="button" class="secondary" data-move="up" aria-label="Mover {{ item.id }} para cima">↑</button><button type="button" class="secondary" data-move="down" aria-label="Mover {{ item.id }} para baixo">↓</button></li>{% endfor %}</ol><p id="priority-status" class="field-help" role="status" aria-live="polite"></p>
+<label for="ai-parallelism">Jobs de extração simultâneos</label><input id="ai-parallelism" name="value" type="number" min="1" max="8" value="{{ ai_parallelism }}" required><p class="field-help">Limite de jobs ativos nesta instância (1 a 8).</p></div>
 <button>Salvar configuração de IA</button>
-</form>
-<form method="post" action="/settings/ai/parallelism" class="ai-parallelism-form">
-<input type="hidden" name="csrf" value="{{ csrf }}">
-<label for="ai-parallelism">Jobs de extração simultâneos</label>
-<input id="ai-parallelism" name="value" type="number" min="1" max="8" value="{{ ai_parallelism }}" required>
-<p class="field-help">Limite de jobs ativos nesta instância (1 a 8).</p>
-<button class="secondary">Salvar limite</button>
 </form>
 </section>
  </details>

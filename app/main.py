@@ -448,8 +448,11 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
                            openrouter_key: str = Form('', max_length=4096),
                            models_openai: list[str] = Form(default=[]),
                            models_openrouter: list[str] = Form(default=[]),
-                           model_order: str = Form('', max_length=100_000)):
+                           model_order: str = Form('', max_length=100_000),
+                           value: int | None = Form(None)):
     try:
+        if value is not None and not 1 <= value <= store.MAX_AI_PARALLELISM:
+            raise ValueError(f'A quantidade de jobs simultâneos deve ser um número entre 1 e {store.MAX_AI_PARALLELISM}.')
         submitted_order = json.loads(model_order) if model_order else []
         selected = {
             'openai': [model for model in models_openai if model],
@@ -462,6 +465,8 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
         ordered.extend({'provider': provider, 'id': model} for provider in ('openai', 'openrouter')
                        for model in selected[provider] if (provider, model) not in seen)
         store.save_ai_settings(openai_key, openrouter_key, ordered)
+        if value is not None:
+            store.save_ai_parallelism(value)
     except (ValueError, TypeError) as exc:
         return settings_redirect(str(exc) or 'A ordem dos modelos é inválida.', error=True)
     return settings_redirect('Configuração de IA salva.')

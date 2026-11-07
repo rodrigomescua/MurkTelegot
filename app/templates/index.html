@@ -2,7 +2,7 @@
 {% block content %}
 <h1 class="page-title">{{ 'Alertas' if alerts else 'Ofertas' }}</h1>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
-<div class="layout"><div><nav id="feed-nav"><a href="{{ '/alerts' if alerts else '/' }}?q={{ q|urlencode }}" id="refresh-feed">Atualizar lista</a></nav>
+<div class="layout"><div>
 <form class="search" method="get" action="{{ '/alerts' if alerts else '/' }}"><label class="sr-only" for="q">Buscar ofertas</label><input id="q" name="q" value="{{ q }}" placeholder="Buscar nas mensagens…" maxlength="200"><button>Buscar</button>{% if q %}<a href="{{ '/alerts' if alerts else '/' }}">Limpar busca</a>{% endif %}</form><div id="new-offers-status" class="new-offers-status" role="status" aria-live="polite" hidden><button type="button" id="new-offers"></button></div><div id="feed" data-marker="{{ marker }}" data-q="{{ q }}" data-alerts="{{ 'true' if alerts else 'false' }}"><p class="muted">{{ offers|length }} ofertas exibidas · Até 100 mensagens recentes{{ ' por seção' if alerts else '' }}.</p>
 {% if alerts %}
 <section class="alert-section" aria-labelledby="unread-title"><h2 id="unread-title">Não lidos · {{ unread_offers|length }}</h2>{% if unread_offers %}<div class="offer-grid">{% for offer in unread_offers %}{% include 'offer_card.html' %}{% endfor %}</div>{% else %}<p class="muted">Nenhum alerta não lido{% if q %} para esta busca{% endif %}.</p>{% endif %}</section>
