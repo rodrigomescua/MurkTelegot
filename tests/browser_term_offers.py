@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory() as directory:
 from app.store import Store
 s = Store(os.path.join(os.environ['DATA_DIR'], 'offers.db'))
 s.execute('INSERT INTO chats VALUES(?,?)', (1, 'Grupo teste'))
-s.execute('INSERT INTO rules VALUES(1,?,?)', ('Alerta PS5', 'ps5'))
+s.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Alerta PS5', 'ps5'))
 for number in range(1, 22):
     s.ingest(1, number, f'Cafeteira premium PS5 oferta sintética {number}', '2026-11-04T12:00:00', None)
 """

@@ -20,7 +20,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
-        self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
 
     def add_offer(self, message_id, text, grouped=None):
         source = json.dumps({'_': 'Message', 'grouped_id': grouped}) if grouped is not None else None
@@ -75,6 +75,23 @@ class IgnoredWordsTests(unittest.TestCase):
             self.add_offer(i, 'PS5 Slim em promoção')
         self.assertEqual([o['message_id'] for o in self.store.feed()], [1])
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 111)
+
+    def test_recently_deleted_includes_manual_and_ignored_until_physical_removal(self):
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        self.store.add_ignored('PS5 Slim')
+        self.store.ingest(-100123, 1, 'PS5 Slim ignorado', (now - timedelta(minutes=5)).isoformat(), None)
+        manual_id = self.store.ingest(-100123, 2, 'Oferta excluída manualmente', now.isoformat(), None)
+        self.store.delete_offer(manual_id)
+        for message_id in range(3, 104):
+            self.store.ingest(-100123, message_id, 'PS5 Slim ignorado',
+                              (now - timedelta(minutes=5)).isoformat(), None)
+        offers = self.store.feed(deleted=True)
+        self.assertEqual(offers[0]['deletion_reason'], 'manual')
+        self.assertTrue(all(offer['deletion_reason'] == 'ignored' for offer in offers[1:]))
+        self.assertEqual(len(offers), 103)
+        self.assertIn('physical_delete_at', offers[0])
+        self.assertIn('physical_delete_at', offers[1])
 
     def test_read_sections_keep_album_together_and_filter_before_limit(self):
         self.add_offer(1, 'Notebook parte 1', grouped=55)
@@ -151,7 +168,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
-        self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
         self.store.ingest(-100123, 1, 'Notebook e PS5 Slim!', '2026-11-04', None)
         self.patch = patch.object(main, 'store', self.store)
         self.patch.start()

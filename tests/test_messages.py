@@ -79,7 +79,7 @@ class PersistenceTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
-        self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Café', 'café'))
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Café', 'café'))
 
     def test_image_without_caption_and_original_metadata_survive_restart(self):
         msg = message(text='', entities=[])
@@ -132,6 +132,8 @@ class PersistenceTests(unittest.TestCase):
             INSERT INTO chats VALUES(-100123,'Grupo');
             CREATE TABLE rules(id INTEGER PRIMARY KEY,name TEXT,keywords TEXT);
             INSERT INTO rules VALUES(3,'Antiga','antiga');
+            CREATE TABLE ignored_keywords(id INTEGER PRIMARY KEY,word TEXT NOT NULL,normalized TEXT NOT NULL UNIQUE);
+            INSERT INTO ignored_keywords VALUES(4,'Ignorada','ignorada');
             CREATE TABLE hits(offer_id INTEGER,rule_id INTEGER,PRIMARY KEY(offer_id,rule_id));
             INSERT INTO hits VALUES(7,3);''')
         db.close()
@@ -144,6 +146,20 @@ class PersistenceTests(unittest.TestCase):
             self.assertNotIn('source_json', {r[1] for r in snapshot.execute('PRAGMA table_info(offers)')})
         finally:
             snapshot.close()
+        created_at_backup = sqlite3.connect(Path(str(path) + '.before-rule-created-at.db')
+                                            if Path(str(path) + '.before-rule-created-at.db').exists()
+                                            else backup)
+        try:
+            self.assertNotIn('created_at', {r[1] for r in created_at_backup.execute('PRAGMA table_info(rules)')})
+            self.assertNotIn('created_at', {r[1] for r in created_at_backup.execute('PRAGMA table_info(ignored_keywords)')})
+            trigger_names = {r[0] for r in created_at_backup.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'")}
+            self.assertNotIn('rules_created', trigger_names)
+            self.assertNotIn('ignored_created', trigger_names)
+            created_at_backup.execute("INSERT INTO rules VALUES(5,'Restaurada','restaurada')")
+            created_at_backup.execute("INSERT INTO ignored_keywords VALUES(6,'Restaurada','restaurada')")
+        finally:
+            created_at_backup.close()
         row = migrated.rows('SELECT * FROM offers')[0]
         self.assertEqual((row['id'], row['body'], row['seen']), (7, 'Oferta antiga', 1))
         self.assertIsNone(row['source_json'])

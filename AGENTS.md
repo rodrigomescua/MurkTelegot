@@ -39,6 +39,8 @@ node --check app/static/app.js
 
 `run-dev.sh` cria o ambiente quando necessário, solicita credenciais e inicia Uvicorn no loopback. Dados locais em `.data/`. Produção usa Python 3.12, usuário sem privilégios, um processo/replica e volume `/data`. Comandos de instalação e operação estão em `README.md`.
 
+Quando o usuário pedir para iniciar o app localmente para teste, use `.data/offers_backup.db`: copie o backup para um diretório temporário e defina `DATA_DIR` para essa cópia. Não inicie esse fluxo com `.data/offers.db` nem altere o arquivo de backup.
+
 ## Distribuição
 
 O workflow `.github/workflows/release.yml` testa pushes em `main`/`master` e pull requests. Uma release estável publicada dispara, após testes, a publicação GHCR para AMD64 (`linux/amd64`) com tags semânticas e `latest`. Push inicial não publica imagem. Não crie release nem altere visibilidade sem solicitação. Preserve o volume em atualizações; rollback restaura imagem e backup compatíveis.

@@ -88,9 +88,11 @@ class Store:
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS rules (
-                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL);
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL, keywords TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS ignored_keywords (
-                    id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
+                    id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS hidden_suggestions (
                     id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
                 CREATE TABLE IF NOT EXISTS offers (
@@ -123,6 +125,35 @@ class Store:
                     item_id INTEGER NOT NULL REFERENCES ai_job_items(id) ON DELETE CASCADE,
                     provider TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL,
                     detail TEXT NOT NULL, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
+            ''')
+            created_at_tables = [table for table in ('rules', 'ignored_keywords')
+                                 if 'created_at' not in {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}]
+            if created_at_tables:
+                backup = Path(str(path) + '.before-rule-created-at.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            for table in ('rules', 'ignored_keywords'):
+                if table in created_at_tables:
+                    db.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+                db.execute(f'''UPDATE {table} SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',
+                    printf('-%d seconds',(SELECT max(id) FROM {table})-id)) WHERE created_at='' ''')
+            db.commit()
+            db.executescript('''
+                CREATE TRIGGER IF NOT EXISTS rules_created AFTER INSERT ON rules WHEN NEW.created_at='' BEGIN
+                    UPDATE rules SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
+                END;
+                CREATE TRIGGER IF NOT EXISTS ignored_created AFTER INSERT ON ignored_keywords WHEN NEW.created_at='' BEGIN
+                    UPDATE ignored_keywords SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
+                END;
             ''')
             if columns:
                 db.execute('BEGIN')
@@ -762,9 +793,7 @@ class Store:
             raise ValueError(f'Os termos devem ter pelo menos {minimum} caracteres, não ser apenas numéricos e conter até 100 caracteres.')
         table = 'ignored_keywords' if action == 'ignore' else 'hidden_suggestions'
         with self.connect() as db:
-            before = db.total_changes
-            db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items)
-            return db.total_changes - before
+            return db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items).rowcount
 
     @staticmethod
     def valid_frequent_term(word, minimum=4):
@@ -910,13 +939,16 @@ class Store:
         where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
         return where, args
 
-    def feed(self, q='', alerts=False, db=None, read=None):
+    def feed(self, q='', alerts=False, db=None, read=None, deleted=False):
         if db is None:
             with self.connect() as db:
-                return self.feed(q, alerts, db, read)
+                return self.feed(q, alerts, db, read, deleted)
         if not alerts:
             self._register_ignored_filter(db)
-        where, args = self.feed_filter(q, alerts)
+        if deleted:
+            where, args = '''WHERE (o.deleted_at IS NOT NULL OR (o.deleted_at IS NULL AND ignored_offer(o.body)))''', []
+        else:
+            where, args = self.feed_filter(q, alerts)
         if alerts and read is not None:
             unread_album = '''EXISTS (SELECT 1 FROM offers m WHERE m.seen=0
                 AND EXISTS (SELECT 1 FROM hits WHERE offer_id=m.id)
@@ -925,12 +957,15 @@ class Store:
             where += ' AND ' + ('NOT ' if read else '') + unread_album
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
-        selected = [dict(row) for row in db.execute(select + where + ' ORDER BY date DESC,id DESC LIMIT 100', args)]
+        selected = [dict(row) for row in db.execute(select + where +
+                         (' ORDER BY julianday(coalesce(deleted_at,date)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
+                         + ('' if deleted else ' LIMIT 100'), args)]
         keys = {(r['chat_id'], r['grouped_id']) for r in selected if r['grouped_id']}
         albums = {}
         if keys:
-            members = [dict(row) for row in db.execute(select + 'WHERE ' + ' OR '.join('(chat_id=? AND grouped_id=?)' for _ in keys)
-                                + ' AND deleted_at IS NULL ORDER BY message_id', [value for key in keys for value in key])]
+            members = [dict(row) for row in db.execute(select + 'WHERE (' + ' OR '.join('(chat_id=? AND grouped_id=?)' for _ in keys)
+                                  + ')' + ('' if deleted else ' AND deleted_at IS NULL') + ' ORDER BY message_id',
+                                  [value for key in keys for value in key])]
             for member in members:
                 albums.setdefault((member['chat_id'], member['grouped_id']), []).append(member)
         cards, added = [], set()
@@ -940,9 +975,21 @@ class Store:
                 continue
             added.add(key)
             parts = albums.get(key, [offer])
-            cards.append({**parts[0], 'parts': parts,
-                          'rules': ', '.join(dict.fromkeys(p['rules'] for p in parts if p['rules'])),
-                          'seen': all(p['seen'] for p in parts if p['rules'])})
+            card = {**parts[0], 'parts': parts,
+                    'rules': ', '.join(dict.fromkeys(p['rules'] for p in parts if p['rules'])),
+                    'seen': all(p['seen'] for p in parts if p['rules'])}
+            if deleted:
+                manual_times = [datetime.fromisoformat(p['deleted_at'].replace('Z', '+00:00'))
+                                for p in parts if p['deleted_at']]
+                card['deletion_reason'] = 'manual' if manual_times else 'ignored'
+                if manual_times:
+                    card['physical_delete_at'] = (max(manual_times) + timedelta(hours=1)).isoformat()
+                elif card['rules']:
+                    card['physical_delete_at'] = None
+                else:
+                    dates = [datetime.fromisoformat(p['date'].replace('Z', '+00:00')) for p in parts]
+                    card['physical_delete_at'] = (max(dates) + timedelta(hours=4)).isoformat()
+            cards.append(card)
         self._attach_extractions(cards, db)
         return cards
 

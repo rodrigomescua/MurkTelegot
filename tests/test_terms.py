@@ -20,7 +20,7 @@ class FrequentTermsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-        self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Alerta', 'ps5'))
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Alerta', 'ps5'))
 
     def add(self, number, body, group=None):
         source = json.dumps({'grouped_id': group}) if group is not None else None

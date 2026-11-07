@@ -383,6 +383,8 @@ function filterRules(ruleSearch) {
     row.hidden = !normalize(row.dataset.term).includes(term);
     return !row.hidden;
   }).length;
+  const count = document.querySelector('#rule-count');
+  if (count) count.textContent = `${rows.length} regras cadastradas · ${visible} visíveis`;
   if (noResults) noResults.hidden = visible !== 0;
 }
 document.addEventListener('input', (event) => {
@@ -393,14 +395,50 @@ function filterIgnored() {
   const search = document.querySelector('#ignored-search');
   if (!search) return;
   const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
-  const rows = [...document.querySelectorAll('.ignored-list li')];
+  const rows = [...document.querySelectorAll('.ignored-list tbody tr')];
   const term = normalize(search.value.trim());
-  rows.forEach((row) => { row.hidden = !normalize(row.querySelector('span').textContent).includes(term); });
+  rows.forEach((row) => { row.hidden = !normalize(row.dataset.term).includes(term); });
   const visible = rows.filter((row) => !row.hidden).length;
   document.querySelector('#ignored-count').textContent = `${rows.length} palavras cadastradas · ${visible} visíveis`;
   document.querySelector('#ignored-no-results').hidden = !term || visible > 0;
 }
+filterIgnored();
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('.sortable-table [data-sort]');
+  if (!button) return;
+  const table = button.closest('.sortable-table');
+  const column = button.closest('th').cellIndex;
+  const direction = button.getAttribute('aria-sort') === 'ascending' ? 'desc' : 'asc';
+  const multiplier = direction === 'asc' ? 1 : -1;
+  const rows = [...table.tBodies[0].rows];
+  rows.sort((a, b) => {
+    const left = a.cells[column].dataset.value ?? a.cells[column].textContent.trim();
+    const right = b.cells[column].dataset.value ?? b.cells[column].textContent.trim();
+    return (button.dataset.sort === 'date' ? Date.parse(left) - Date.parse(right) : left.localeCompare(right, 'pt-BR', {sensitivity: 'base'})) * multiplier;
+  });
+  table.tBodies[0].append(...rows);
+  table.querySelectorAll('[data-sort]').forEach((header) => {
+    header.removeAttribute('aria-sort');
+    header.querySelector('[aria-hidden="true"]').textContent = '↕';
+  });
+  button.setAttribute('aria-sort', direction === 'asc' ? 'ascending' : 'descending');
+  button.querySelector('[aria-hidden="true"]').textContent = direction === 'asc' ? '↑' : '↓';
+});
 ignoredSettings?.addEventListener('input', (event) => { if (event.target.id === 'ignored-search') filterIgnored(); });
+async function updateRulesList() {
+  const list = document.querySelector('#rules-list');
+  if (!list) return;
+  const search = list.querySelector('#rule-search').value;
+  const response = await fetch('/rules-page', {credentials: 'same-origin'});
+  if (!response.ok || response.redirected) throw new Error();
+  const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+  const next = doc.querySelector('#rules-list');
+  if (!next) throw new Error();
+  list.innerHTML = next.innerHTML;
+  const searchInput = list.querySelector('#rule-search');
+  searchInput.value = search;
+  filterRules(searchInput);
+}
 async function updateIgnoredList() {
   if (!ignoredSettings) return;
   const search = document.querySelector('#ignored-search').value;
@@ -435,10 +473,7 @@ async function submitQuick(form, button) {
         document.querySelector('#refresh-feed')?.click();
       }
       if (form.action.endsWith('/rules') && document.querySelector('#rules-list')) {
-        const page = await fetch('/rules-page', {credentials: 'same-origin'});
-        if (!page.ok || page.redirected) throw new Error();
-        const doc = new DOMParser().parseFromString(await page.text(), 'text/html');
-        document.querySelector('#rules-list').innerHTML = doc.querySelector('#rules-list').innerHTML;
+        await updateRulesList();
       }
     } catch { toast('Alteração salva, mas não foi possível atualizar a tela. Recarregue para conferir.', true); }
   } catch { toast('Não foi possível confirmar a operação. Confira a conexão e o resultado antes de tentar novamente.', true); }
@@ -626,10 +661,7 @@ selectionBar.addEventListener('click', async (event) => {
       await refreshTerms();
       document.querySelector('#refresh-feed')?.click();
     } else if (document.querySelector('#rules-list')) {
-      const response = await fetch('/rules-page', {credentials: 'same-origin'});
-      if (!response.ok || response.redirected) throw new Error();
-      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
-      document.querySelector('#rules-list').innerHTML = page.querySelector('#rules-list').innerHTML;
+      await updateRulesList();
     }
   } catch {
     selectionToast(saved ? 'Alteração salva, mas não foi possível atualizar a tela. Recarregue para conferir.' :

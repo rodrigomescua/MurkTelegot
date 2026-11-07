@@ -294,6 +294,15 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
     })
 
 
+@app.get('/deleted', dependencies=[Depends(authenticate)])
+def deleted_offers_page(request: Request):
+    offers = store.feed(deleted=True)
+    prepare_offers(offers)
+    return templates.TemplateResponse(request, 'deleted.html', {
+        'csrf': csrf_token, 'offers': offers, 'deleted_view': True,
+    })
+
+
 @app.get('/alerts/unread-count', dependencies=[Depends(authenticate)])
 async def unread_alert_count():
     return {'unread': store.unread()}
@@ -587,7 +596,7 @@ async def add_rule(request: Request, background_tasks: BackgroundTasks,
 @app.get('/rules-page', dependencies=[Depends(authenticate)])
 async def rules_page(request: Request, notice: str = ''):
     return templates.TemplateResponse(request, 'rules.html', {'csrf': csrf_token, 'notice': notice,
-        'rules': store.rows('SELECT id,keywords FROM rules ORDER BY keywords COLLATE NOCASE,id DESC')})
+        'rules': store.rows('SELECT id,keywords,created_at FROM rules ORDER BY created_at DESC,id DESC')})
 
 
 @app.post('/rules/{rule_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -602,7 +611,8 @@ async def delete_rule(rule_id: int):
 async def ignored_page(request: Request, notice: str = ''):
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
-        'ignored_words': store.rows('SELECT id,word FROM ignored_keywords ORDER BY word COLLATE NOCASE'),
+        'ignored_words': store.rows('''SELECT id,word,created_at FROM ignored_keywords
+            ORDER BY created_at DESC,id DESC'''),
     })
 
 

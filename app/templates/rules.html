@@ -1,7 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Regras de alerta</h1>
-{% if notice %}<p class="toast" role="status">{{ notice }}</p>{% endif %}
-<section id="rules"><h2>Adicionar termo</h2><form method="post" action="/rules"><input type="hidden" name="csrf" value="{{ csrf }}"><label for="keyword">Palavra ou expressão</label><input id="keyword" name="keyword" required maxlength="100" placeholder="Ex.: cafeteira italiana"><button>Criar alerta</button></form></section>
-<section id="rules-list"><h2>Regras cadastradas</h2><label for="rule-search">Buscar regra</label><input id="rule-search" type="search" placeholder="Buscar palavra ou expressão…" autocomplete="off">{% if rules %}<ul class="rule-list">{% for rule in rules %}<li class="rule-item" data-term="{{ rule.keywords }}"><span>{{ rule.keywords }}</span><form method="post" action="/rules/{{ rule.id }}/delete" data-confirm="Remover a regra ‘{{ rule.keywords }}’? As ofertas salvas serão preservadas."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Excluir</button></form></li>{% endfor %}</ul><p id="rules-no-results" class="muted" hidden>Nenhuma regra corresponde à busca.</p>{% else %}<p class="muted">Nenhuma regra cadastrada.</p>{% endif %}</section>
+{% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
+<div class="management-page" id="rules">
+  <section class="management-panel management-form">
+    <h2>Adicionar termo</h2>
+    <form method="post" action="/rules">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label for="keyword">Palavra ou expressão</label>
+      <input id="keyword" name="keyword" required maxlength="100" placeholder="Ex.: cafeteira italiana">
+      <button>Criar alerta</button>
+    </form>
+  </section>
+  <section class="management-panel management-list" id="rules-list">
+    <h2>Regras cadastradas</h2>
+    <div class="management-toolbar">
+      <div class="management-search">
+        <label for="rule-search">Buscar regra</label>
+        <input id="rule-search" type="search" placeholder="Buscar palavra ou expressão…" autocomplete="off">
+      </div>
+      <p class="management-count muted" id="rule-count" role="status">{{ rules|length }} regras cadastradas</p>
+    </div>
+    {% if rules %}
+    <div class="table-scroll">
+      <table class="sortable-table" data-sort-default="date" data-sort-direction="desc">
+        <thead><tr>
+          <th><button type="button" data-sort="text">Regra <span aria-hidden="true">↕</span></button></th>
+          <th><button type="button" data-sort="date" aria-sort="descending">Criada em <span aria-hidden="true">↓</span></button></th>
+          <th>Ação</th>
+        </tr></thead>
+        <tbody>{% for rule in rules %}
+          <tr class="rule-item" data-term="{{ rule.keywords }}">
+            <td>{{ rule.keywords }}</td>
+            <td data-value="{{ rule.created_at }}"><time datetime="{{ rule.created_at }}">{{ rule.created_at[:16]|replace('T',' ') }} UTC</time></td>
+            <td><form method="post" action="/rules/{{ rule.id }}/delete" data-confirm="Remover a regra ‘{{ rule.keywords }}’? As ofertas salvas serão preservadas."><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Excluir</button></form></td>
+          </tr>
+        {% endfor %}</tbody>
+      </table>
+    </div>
+    <p id="rules-no-results" class="management-empty muted" hidden>Nenhuma regra corresponde à busca.</p>
+    {% else %}
+    <p class="management-empty muted">Nenhuma regra cadastrada.</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

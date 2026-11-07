@@ -162,3 +162,11 @@ Publicação: release `v0.5.4` no commit `f4b206f`; workflow `42355305879` aprov
 139 testes `unittest` passaram, incluindo o envio do formulário de IA com `value=3` e a leitura do valor persistido. `py_compile`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram.
 
 Release `v0.5.5`: commit `0cb157f`; workflows de push `42356626743` e release `42356632696` aprovados. GHCR confirmou `0.5.5` como índice OCI incluindo `linux/amd64`, digest `sha256:2dcee11995b125612ff0e37892cbb24d74ce51765c55e70b196f0d21ac5b18b7`. Appstore atualizado no commit `4a826fc`, versão `0.5.5`, `tipi_version` 35; `bun test` passou com 462 testes e workflow `42356646286` aprovado. O catálogo foi atualizado antes de terminar a publicação da imagem por autorização explícita do usuário. A instância Runtipi não foi atualizada.
+
+## Listagens de regras e ofertas excluídas recentemente — 2026-11-07
+
+142 testes `unittest` passaram, incluindo ordenação/data nas duas listagens, migração aditiva de `created_at` com backup e inclusão de mais de 100 ofertas na tela `/deleted`. `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile app/main.py app/store.py` e `git diff --check` passaram. Validação visual não executada por solicitação do usuário. O app foi iniciado em `0.0.0.0:8000`, e `/health` e `/login` responderam HTTP 200 pelo IP da LAN `192.168.0.10`; usa uma cópia temporária de `.data/offers_backup.db` e uma senha temporária informada ao usuário. A API Telegram não está configurada nesse processo. A retenção existente foi mantida: o código aplica 4h/24h às ofertas sem alerta e 1h à exclusão manual, divergindo das 4h/12h mencionadas no pedido.
+
+## Release 0.5.6 — validação local — 2026-11-07
+
+142 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile app/main.py app/store.py` e `git diff --check` passaram após corrigir a ordem da migração: o backup é feito antes de instalar os gatilhos de data, mantendo compatibilidade de rollback com a versão anterior. O servidor local foi parado a pedido. Validação visual não executada a pedido do usuário. Publicação e workflow GHCR serão registrados após a conclusão.

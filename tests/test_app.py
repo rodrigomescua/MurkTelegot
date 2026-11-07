@@ -42,7 +42,7 @@ class StoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Ofertas'))
-        self.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Café', 'café'))
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Café', 'café'))
 
     def ingest(self, chat=-100123, body='Café barato'):
         self.store.ingest(chat, 1, body, '2026-11-04T12:00:00+00:00', None)
@@ -596,10 +596,37 @@ class WebTests(unittest.TestCase):
         self.assertIn('data-confirm="Remover a regra', page.text)
         self.assertEqual(self.client.get('/rules-page', follow_redirects=False).status_code, 303)
 
+    def test_rule_and_ignored_management_sort_newest_first_and_show_dates(self):
+        main.store.execute("INSERT INTO rules(id,name,keywords,created_at) VALUES(1,'Antiga','antiga','2026-01-01T00:00:00Z')")
+        main.store.execute("INSERT INTO rules(id,name,keywords,created_at) VALUES(2,'Nova','nova','2026-02-01T00:00:00Z')")
+        main.store.execute("INSERT INTO ignored_keywords(id,word,normalized,created_at) VALUES(1,'Antiga','antiga','2026-01-01T00:00:00Z')")
+        main.store.execute("INSERT INTO ignored_keywords(id,word,normalized,created_at) VALUES(2,'Nova','nova','2026-02-01T00:00:00Z')")
+        rules = self.client.get('/rules-page', cookies=self.auth).text
+        ignored = self.client.get('/ignored', cookies=self.auth).text
+        self.assertLess(rules.index('>nova</td>'), rules.index('>antiga</td>'))
+        self.assertLess(ignored.index('>Nova</td>'), ignored.index('>Antiga</td>'))
+        self.assertIn('2026-02-01T00:00:00Z', rules)
+        self.assertIn('data-sort="date" aria-sort="descending"', ignored)
+
+    def test_recently_deleted_page_shows_ignored_and_manual_offers(self):
+        from datetime import datetime, timezone
+        main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+        main.store.add_ignored('PS5 Slim')
+        date = datetime.now(timezone.utc).isoformat()
+        main.store.ingest(1, 1, 'PS5 Slim oferta', date, None)
+        manual_id = main.store.ingest(1, 2, 'Oferta removida manualmente', date, None)
+        main.store.delete_offer(manual_id)
+        page = self.client.get('/deleted', cookies=self.auth)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('Excluídas recentemente', page.text)
+        self.assertIn('Excluída por palavra ignorada', page.text)
+        self.assertIn('Excluída manualmente', page.text)
+        self.assertEqual(self.client.get('/deleted', follow_redirects=False).status_code, 303)
+
     def test_alert_offer_deletion_is_soft_authenticated_and_album_wide(self):
         import json
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
-        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        main.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
         main.store.ingest(-100123, 1, 'Notebook parte alertada', '2026-11-04T12:00:00+00:00', None,
                           source_json=json.dumps({'grouped_id': 123}))
         main.store.ingest(-100123, 2, 'Notebook outra parte', '2026-11-04T12:00:01+00:00', None,
@@ -636,7 +663,7 @@ class WebTests(unittest.TestCase):
 
     def test_card_actions_return_json_and_can_undo_without_moving_cards(self):
         main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        main.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
         first = main.store.ingest(1, 1, 'Notebook promoção', '2026-11-04', None)
         headers = {'Accept': 'application/json'}
         data = {'csrf': main.csrf_token}
@@ -796,7 +823,7 @@ class WebTests(unittest.TestCase):
 
     def test_alert_page_separates_states_and_direct_mark_read(self):
         main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-        main.store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+        main.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
         main.store.add_ignored('PS5 Slim')
         first = main.store.ingest(1, 1, 'Notebook PS5 Slim', '2026-11-04', None)
         second = main.store.ingest(1, 2, 'Notebook lido', '2026-11-04', None)
@@ -834,7 +861,7 @@ class TelegramTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')
             store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
-            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
             telegram = Telegram(store, Path(directory), None, None)
             message = SimpleNamespace(id=5, raw_text='Notebook em oferta', date=datetime.now(timezone.utc), to_json=lambda: '{}')
             await telegram.receive(SimpleNamespace(chat_id=99, message=message))

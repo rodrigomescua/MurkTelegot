@@ -291,7 +291,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')
             store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
             store.add_ignored('PS5 Slim')
             store.save_gotify('http://gotify', 'test-token', True)
             telegram = Telegram(store, Path(directory), None, None)
@@ -316,7 +316,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')
             store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
             store.save_gotify('http://gotify', 'test-token', True)
             store.ingest(1, 1, 'Sem correspondência', '2026-11-04', None)
             telegram = Telegram(store, Path(directory), None, None)
@@ -335,7 +335,7 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')
             store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-            store.execute('INSERT INTO rules VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
             telegram = Telegram(store, Path(directory), None, None)
             def event(mid):
                 message = SimpleNamespace(id=mid, raw_text='Notebook', date=datetime.now(timezone.utc), to_json=lambda: '{}')
