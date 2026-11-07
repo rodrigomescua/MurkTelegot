@@ -133,4 +133,6 @@ Release `v0.5.0`: commit `550fdf6`; workflows de push `42345739262` e release `4
 
 ## Redesenho da navbar — 2026-11-07
 
-A navbar sticky foi verificada no Chromium em 1365 px (grade expandida), 768 px (painel hambúrguer em duas colunas) e 390 px (painel vertical). O ícone permaneceu visível ao rolar; abrir/fechar, Escape e devolução de foco passaram. Sem JavaScript, os links permanecem disponíveis em coluna no celular, sem overflow. Os 136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não houve commit, publicação, atualização da instância nem teste em aparelho físico.
+A navbar sticky foi verificada no Chromium em 1365 px (grade expandida), 768 px (painel hambúrguer em duas colunas) e 390 px (painel vertical). O ícone permaneceu visível ao rolar; abrir/fechar, Escape e devolução de foco passaram. Sem JavaScript, os links permanecem disponíveis em coluna no celular, sem overflow. Os 136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não houve teste em aparelho físico.
+
+Release `v0.5.1`: commit `2a0267c`; workflow `42348091172` aprovou testes e publicação. GHCR confirmou `0.5.1` como índice OCI `linux/amd64`, digest `sha256:72322807428e0c0e6184ef80e4271bb68d4607cc0c7eefdd31c3012ed26db8be`. Appstore atualizado no commit `8cc9341`, versão `0.5.1`, `tipi_version` 31; 462 testes e workflow `42348214564` aprovados. O push bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
