@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Configurações</h1>
+<h1 class="page-title">Configurações</h1>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
 {% if test_error %}<p class="notice error" role="alert">{{ test_error }}</p>{% endif %}
+<details class="settings-accordion"><summary id="ai-title">Inteligência artificial</summary>
 <section aria-labelledby="ai-title" class="ai-settings">
-<h2 id="ai-title">Inteligência artificial</h2>
-<p>Configure provedores e modelos para extrair automaticamente novas ofertas não ignoradas e processar ofertas em segundo plano. A ordem e as chaves salvas são consultadas a cada chamada, então alterações valem para as próximas tentativas. Cancelar interrompe a conexão local, mas o provedor ainda pode continuar o processamento e cobrar. O texto das ofertas é enviado ao provedor e pode consumir créditos da sua conta.</p>
+<p class="field-help">O texto das ofertas é enviado aos provedores e pode consumir créditos. Ao cancelar, o provedor ainda pode concluir o processamento e cobrar.</p>
 <form method="post" action="/settings/ai" id="ai-settings-form">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <input type="hidden" name="model_order" id="model-order" value='{{ ai_config.model_order|tojson }}'>
@@ -38,21 +38,11 @@
 <p class="field-help">Limite de jobs ativos nesta instância (1 a 8).</p>
 <button class="secondary">Salvar limite</button>
 </form>
-<form method="post" action="/settings/ai/jobs" class="job-create" data-job-create data-ready="{{ 'true' if ai_config.ready else 'false' }}" data-count-missing="{{ ai_config.eligible_count }}" data-count-all="{{ ai_config.total_cards }}">
-<input type="hidden" name="csrf" value="{{ csrf }}"><p><strong>Criar job de processamento</strong></p><p class="field-help" data-job-count aria-live="polite">{{ ai_config.eligible_count }} ofertas sem extração entre as {{ ai_config.total_cards }} exibidas no feed padrão da Home.</p>
-<fieldset><legend>Resultados já extraídos</legend>
-<label class="check"><input type="radio" name="replace_existing" value="false" checked> Manter os resultados existentes e pular ofertas já processadas</label>
-<label class="check"><input type="radio" name="replace_existing" value="true"> Substituir resultados existentes</label>
-</fieldset>
-{% if not ai_config.ready %}<p class="field-help">Configure uma chave e selecione ao menos um modelo para iniciar o processamento.</p>{% endif %}
-{% if not ai_config.total_cards %}<p class="field-help">A Home ainda não tem ofertas elegíveis.</p>{% endif %}
-<p class="field-help" data-unsaved-help>A configuração salva será consultada antes de cada chamada. Salve qualquer alteração antes de enfileirar.</p>
-<button data-start-job {% if not ai_config.ready or not ai_config.total_cards %}disabled{% endif %}>Iniciar job</button> <a href="/ai-jobs">Acompanhar jobs</a>
-</form>
 </section>
+ </details>
+<details class="settings-accordion"><summary id="gotify-title">Notificações Gotify</summary>
 <section aria-labelledby="gotify-title">
-<h2 id="gotify-title">Notificações Gotify</h2>
-<p>Receba uma notificação com o texto e o link da oferta quando ela gerar um novo alerta, inclusive se estiver oculta por palavras ignoradas.</p>
+<p class="field-help">Notificações incluem o texto e o link da oferta, mesmo quando oculta por palavras ignoradas.</p>
 <form method="post" action="/settings/gotify">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label for="gotify-url">URL do servidor Gotify</label><input id="gotify-url" name="url" type="url" maxlength="2048" value="{{ gotify_url }}" placeholder="https://gotify.exemplo.com" autocomplete="url">
@@ -64,15 +54,16 @@
 <div class="toolbar"><form method="post" action="/settings/gotify/test"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Enviar teste com configuração salva</button></form>{% if token_configured or gotify_url %}<form method="post" action="/settings/gotify/clear" data-confirm="Remover a URL e o token Gotify salvos?"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Remover configuração</button></form>{% endif %}</div>
 <p class="field-help">O teste usa os dados já salvos. As notificações usam formatação compatível com o Gotify; spoilers ficam ocultos e mídias podem ser abertas no Telegram. Falhas não interrompem a coleta e não são reenviadas automaticamente.</p>
 </section>
+ </details>
+<details class="settings-accordion"><summary id="terms-settings-title">Termos frequentes</summary>
 <section aria-labelledby="terms-settings-title">
-<h2 id="terms-settings-title">Termos frequentes</h2>
-<p>Termos formados apenas por números são sempre ignorados.</p>
 <form method="post" action="/settings/frequent-terms">
 <input type="hidden" name="csrf" value="{{ csrf }}">
 <label for="frequent-terms-min-chars">Quantidade mínima de caracteres</label>
 <input id="frequent-terms-min-chars" name="min_chars" type="number" min="4" max="100" value="{{ frequent_terms_min_chars }}" required>
-<p class="field-help">O mínimo permitido é 4 caracteres.</p>
+<p class="field-help">O mínimo permitido é 4 caracteres; termos apenas numéricos são ignorados.</p>
 <button>Salvar configuração</button>
 </form>
 </section>
+ </details>
 {% endblock %}

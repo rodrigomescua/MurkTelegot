@@ -1,8 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/">← Voltar ao painel</a></p>
-<h1>Escolha suas fontes.</h1>
-<p>Somente novas mensagens e edições dos grupos selecionados serão armazenadas. Desmarcar um grupo interrompe a coleta, mas preserva as ofertas existentes.</p>
+<h1 class="page-title">Grupos</h1>
 <section>
   <form method="post" action="/groups" id="groups-form">
     <input type="hidden" name="csrf" value="{{ csrf }}">

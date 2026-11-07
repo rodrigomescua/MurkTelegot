@@ -18,7 +18,7 @@
 <div class="ai-commerce">
 {% if offer.extraction.original_price %}<span class="ai-original-price">De {{ offer.extraction.original_price }}</span>{% endif %}
 {% if offer.extraction.discounted_price %}<strong class="ai-discount-price">Por {{ offer.extraction.discounted_price }}</strong>{% endif %}
-{% if offer.extraction.coupon_code %}<span class="badge ai-coupon">Cupom {{ offer.extraction.coupon_code }}</span>{% endif %}
+{% if offer.extraction.coupon_code %}<span class="badge ai-coupon">{{ offer.extraction.coupon_code }}</span>{% endif %}
 </div>
 </div>
 {% else %}<div class="offer-preview">{% for line in offer.preview_lines %}<span>{{ line }}</span>{% else %}<span class="muted">Oferta sem texto</span>{% endfor %}</div>{% endif %}

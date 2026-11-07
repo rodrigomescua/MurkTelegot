@@ -1,7 +1,6 @@
 {% extends 'base.html' %}
 {% block content %}
-<h1>Ofertas com “{{ word }}”</h1>
-<p><a href="/terms">← Voltar aos termos frequentes</a></p>
+<h1 class="page-title">Ofertas · {{ word }}</h1>
 <div id="term-offers-content">
 {% if offers %}
 <p class="muted">{{ total }} ofertas com este termo</p>

@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Palavras ignoradas</h1>
-<p>Ofertas com estas palavras ficam fora da listagem principal. Os alertas continuam funcionando. PS5 encontra (PS5), mas não PS5pro; caixa e acentos são ignorados.</p>
+<h1 class="page-title">Palavras ignoradas</h1>
 {% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
 <section id="ignored-settings">
 <form method="post" action="/ignored"><input type="hidden" name="csrf" value="{{ csrf }}"><label for="ignored-word">Palavra ou expressão inteira</label><input id="ignored-word" name="word" placeholder="Ex.: PS5" required maxlength="100"><button>Adicionar palavra</button></form>

@@ -1,5 +1,49 @@
 'use strict';
 
+const primaryNavigation = document.querySelector('.primary-navigation');
+if (primaryNavigation) {
+  const toggle = primaryNavigation.querySelector('.nav-toggle');
+  const menu = primaryNavigation.querySelector('#main-nav');
+  const mobileNavigation = window.matchMedia('(max-width: 850px)');
+  const setNavigation = (expanded) => {
+    toggle.setAttribute('aria-expanded', String(expanded));
+    menu.hidden = mobileNavigation.matches && !expanded;
+  };
+  primaryNavigation.classList.add('nav-enhanced');
+  setNavigation(!mobileNavigation.matches);
+  toggle.addEventListener('click', () => setNavigation(toggle.getAttribute('aria-expanded') !== 'true'));
+  menu.addEventListener('click', (event) => {
+    if (mobileNavigation.matches && event.target.closest('a')) setNavigation(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && mobileNavigation.matches && toggle.getAttribute('aria-expanded') === 'true') {
+      setNavigation(false);
+      toggle.focus();
+    }
+  });
+  mobileNavigation.addEventListener('change', () => setNavigation(!mobileNavigation.matches));
+}
+
+function updateUnreadCounter(value) {
+  if (!Number.isFinite(value)) return;
+  const counter = document.querySelector('#alert-counter strong');
+  if (!counter) return;
+  counter.textContent = value;
+  counter.closest('a')?.setAttribute('aria-label', `${value} alertas não lidos`);
+}
+
+if (document.querySelector('#alert-counter strong')) {
+  const refreshUnreadCount = async () => {
+    try {
+      const response = await fetch('/alerts/unread-count', {credentials: 'same-origin'});
+      if (!response.ok) return;
+      const result = await response.json();
+      updateUnreadCounter(result.unread);
+    } catch { /* Keep the last known count when offline. */ }
+  };
+  window.setInterval(refreshUnreadCount, 30000);
+}
+
 // Login failures keep the current DOM: secrets never need to be stored or echoed by the server.
 document.addEventListener('submit', async (event) => {
   const form = event.target;
@@ -196,8 +240,7 @@ async function handleOfferCardSubmit(event) {
     const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível atualizar o alerta. Tente novamente.');
-    const counter = document.querySelector('#alert-counter strong');
-    if (counter && Number.isFinite(result.unread)) counter.textContent = result.unread;
+    updateUnreadCounter(result.unread);
     const detail = card.querySelector('.offer-detail');
     const actions = card.querySelector('.offer-card-actions');
     if (undo) {
@@ -392,7 +435,9 @@ if (feed) {
     feed.innerHTML = next.innerHTML;
     marker = Number(next.dataset.marker);
     generation++;
-    document.querySelector('#alert-counter').innerHTML = doc.querySelector('#alert-counter').innerHTML;
+    const counter = document.querySelector('#alert-counter');
+    counter.innerHTML = doc.querySelector('#alert-counter').innerHTML;
+    updateUnreadCounter(Number(counter.querySelector('strong').textContent));
     document.querySelector('#feed-nav').innerHTML = doc.querySelector('#feed-nav').innerHTML;
     status.hidden = true;
     formatTimes(feed);
@@ -422,6 +467,22 @@ if (feed) {
 
 
 const ignoredSettings = document.querySelector('#ignored-settings');
+function filterRules(ruleSearch) {
+  if (!ruleSearch) return;
+  const rows = [...document.querySelectorAll('.rule-item')];
+  const noResults = document.querySelector('#rules-no-results');
+  const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
+  const term = normalize(ruleSearch.value.trim());
+  const visible = rows.filter((row) => {
+    row.hidden = !normalize(row.dataset.term).includes(term);
+    return !row.hidden;
+  }).length;
+  if (noResults) noResults.hidden = visible !== 0;
+}
+document.addEventListener('input', (event) => {
+  if (event.target.id === 'rule-search') filterRules(event.target);
+});
+filterRules(document.querySelector('#rule-search'));
 function filterIgnored() {
   const search = document.querySelector('#ignored-search');
   if (!search) return;
@@ -641,7 +702,7 @@ selectionBar.addEventListener('click', async (event) => {
   selectionBar.querySelectorAll('button').forEach((item) => { item.disabled = true; });
   const data = new FormData();
   data.set('csrf', csrf);
-  if (action === 'rule') { data.set('name', text); data.set('keywords', text); }
+  if (action === 'rule') data.set('keyword', text);
   else data.set('word', text);
   let saved = false;
   try {

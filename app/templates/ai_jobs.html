@@ -1,7 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Jobs de IA</h1>
+<h1 class="page-title">Jobs de IA</h1>
 {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+<section class="job-create-section"><h2>Criar job</h2><form method="post" action="/ai-jobs" class="job-create" data-job-create data-ready="{{ 'true' if ai_config.ready else 'false' }}" data-count-missing="{{ ai_config.eligible_count }}" data-count-all="{{ ai_config.total_cards }}">
+<input type="hidden" name="csrf" value="{{ csrf }}"><p class="field-help" data-job-count aria-live="polite">{{ ai_config.eligible_count }} ofertas sem extração entre as {{ ai_config.total_cards }} exibidas no feed padrão da Home.</p>
+<fieldset><legend>Resultados já extraídos</legend><label class="check"><input type="radio" name="replace_existing" value="false" checked> Manter resultados existentes e pular ofertas já processadas</label><label class="check"><input type="radio" name="replace_existing" value="true"> Substituir resultados existentes</label></fieldset>
+{% if not ai_config.ready %}<p class="field-help">Configure uma chave e selecione ao menos um modelo em <a href="/settings">Configurações</a>.</p>{% endif %}
+{% if not ai_config.total_cards %}<p class="field-help">A Home ainda não tem ofertas para processar.</p>{% endif %}
+<p class="field-help" data-unsaved-help>O job usa a configuração de IA salva.</p><button data-start-job {% if not ai_config.ready or not ai_config.total_cards %}disabled{% endif %}>Iniciar job</button>
+</form></section>
 <div class="toolbar"><form method="post" action="/ai-jobs/clear-completed"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Limpar concluídos</button></form><form method="post" action="/ai-jobs/clear-all" data-confirm="Cancelar jobs na fila e em andamento e apagar todo o histórico? Uma chamada ativa será interrompida localmente; o provedor ainda pode concluir o processamento ou cobrar."><input type="hidden" name="csrf" value="{{ csrf }}"><button>Cancelar e limpar tudo</button></form></div>
 {% if active_job %}
 <section class="job-card active-job" aria-labelledby="active-job-title" data-active-job="{{ active_job.id }}">

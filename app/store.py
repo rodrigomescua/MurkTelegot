@@ -159,11 +159,67 @@ class Store:
                         temporary.unlink(missing_ok=True)
                 db.execute('ALTER TABLE ai_jobs ADD COLUMN queue_at TEXT')
                 db.execute('UPDATE ai_jobs SET queue_at=created_at WHERE queue_at IS NULL')
+            db.commit()
+            self._migrate_rule_terms(db, path)
             db.execute('''DELETE FROM ignored_keywords
                           WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_deleted ON offers(deleted_at) WHERE deleted_at IS NOT NULL')
+
+    def _migrate_rule_terms(self, db, path):
+        marker = 'rules_one_term_v1'
+        if db.execute('SELECT 1 FROM settings WHERE key=?', (marker,)).fetchone():
+            return
+        rules = db.execute('SELECT id,name,keywords FROM rules ORDER BY id').fetchall()
+        changed = any(len([term for term in (row['keywords'] or '').split(',') if term.strip()]) > 1 or
+                      (row['keywords'] or '').strip() != row['name'] for row in rules)
+        if changed:
+            backup = Path(str(path) + '.before-rule-terms.db')
+            if not backup.exists():
+                temporary = Path(str(backup) + '.tmp')
+                try:
+                    snapshot = sqlite3.connect(temporary)
+                    try:
+                        db.backup(snapshot)
+                    finally:
+                        snapshot.close()
+                    os.replace(temporary, backup)
+                finally:
+                    temporary.unlink(missing_ok=True)
+        db.execute('BEGIN IMMEDIATE')
+        try:
+            for rule in rules:
+                terms, seen = [], set()
+                for raw in (rule['keywords'] or '').split(','):
+                    term = raw.strip()
+                    key = normalize(term)
+                    if term and key not in seen:
+                        seen.add(key)
+                        terms.append(term)
+                if not terms:
+                    continue
+                rule_ids = [rule['id']]
+                db.execute('UPDATE rules SET name=?,keywords=? WHERE id=?',
+                           (terms[0], terms[0], rule['id']))
+                for term in terms[1:]:
+                    rule_ids.append(db.execute('INSERT INTO rules(name,keywords) VALUES(?,?)',
+                                               (term, term)).lastrowid)
+                for hit in db.execute('''SELECT h.offer_id,o.body FROM hits h JOIN offers o ON o.id=h.offer_id
+                                         WHERE h.rule_id=?''', (rule['id'],)).fetchall():
+                    matched = [index for index, term in enumerate(terms) if matches(hit['body'], term)]
+                    if not matched:
+                        continue
+                    first, *rest = matched
+                    if first:
+                        db.execute('UPDATE hits SET rule_id=? WHERE offer_id=? AND rule_id=?',
+                                   (rule_ids[first], hit['offer_id'], rule['id']))
+                    db.executemany('INSERT OR IGNORE INTO hits(offer_id,rule_id) VALUES(?,?)',
+                                   [(hit['offer_id'], rule_ids[index]) for index in rest])
+            db.execute('INSERT INTO settings(key,value) VALUES(?,?)', (marker, '1'))
+        except Exception:
+            db.rollback()
+            raise
 
     @contextmanager
     def connect(self):
@@ -557,12 +613,15 @@ class Store:
             result[key] = result[key] or 0
         return result
 
-    def add_rule(self, name, keywords, *, return_alerts=False):
+    def add_rule(self, term, *, return_alerts=False):
+        term = term.strip()
+        if not term or len(term) > 100 or ',' in term:
+            raise ValueError('Informe uma palavra ou expressão de até 100 caracteres, sem vírgulas.')
         with self.connect() as db:
             rule_id = db.execute('INSERT INTO rules(name, keywords) VALUES(?,?)',
-                                 (name, keywords)).lastrowid
+                                 (term, term)).lastrowid
             matched = [row['id'] for row in db.execute('SELECT id,body FROM offers WHERE deleted_at IS NULL')
-                       if matches(row['body'], keywords)]
+                       if matches(row['body'], term)]
             db.executemany('INSERT INTO hits(offer_id,rule_id) VALUES(?,?)',
                            [(offer_id, rule_id) for offer_id in matched])
             db.executemany('UPDATE offers SET seen=0 WHERE id=?', [(offer_id,) for offer_id in matched])
@@ -580,7 +639,7 @@ class Store:
                     notified_groups.add(group)
                     notifications.append({'offer_id': row['id'], 'chat_id': row['chat_id'], 'message_id': row['message_id'],
                                           'grouped_id': row['grouped_id'], 'source': 'backfill', 'chat': row['chat_title'], 'body': row['body'], 'url': row['url'],
-                                          'source_json': row['source_json'], 'rules': [name]})
+                                          'source_json': row['source_json'], 'rules': [term]})
                 return len(matched), notifications
             return len(matched)
 

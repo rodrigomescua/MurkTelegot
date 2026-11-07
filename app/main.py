@@ -204,7 +204,13 @@ async def process_ai_job(job):
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.mount('/static', StaticFiles(directory='app/static'), name='static')
 app.mount('/brand', StaticFiles(directory='assets/murktelegot-logo'), name='brand')
-templates = Jinja2Templates(directory='app/templates')
+
+
+def template_context(request):
+    return {} if request.url.path == '/login' else {'unread': store.unread()}
+
+
+templates = Jinja2Templates(directory='app/templates', context_processors=[template_context])
 
 
 @app.middleware('http')
@@ -284,9 +290,13 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
         'needs_password': telegram.needs_password,
         'chats': store.rows('SELECT * FROM chats ORDER BY title'),
         'offers': offers, 'unread_offers': unread_offers, 'read_offers': read_offers, 'marker': marker,
-        'unread': store.unread(),
         'alerts': alerts, 'q': q, 'notice': notice,
     })
+
+
+@app.get('/alerts/unread-count', dependencies=[Depends(authenticate)])
+async def unread_alert_count():
+    return {'unread': store.unread()}
 
 
 @app.get('/telegram', dependencies=[Depends(authenticate)])
@@ -364,11 +374,6 @@ async def telegram_action(request: Request, action: str, phone: str = Form('', m
 async def settings_page(request: Request, notice: str = '', test_error: str = ''):
     config = store.gotify_settings()
     ai_config = store.ai_settings()
-    ai_cards = store.feed()
-    ai_config['total_cards'] = len(ai_cards)
-    ai_config['eligible_count'] = sum(not card.get('extraction') for card in ai_cards)
-    ai_config['ready'] = bool(ai_config['model_order']) and all(
-        ai_config['providers'][item['provider']]['configured'] for item in ai_config['model_order'])
     return templates.TemplateResponse(request, 'settings.html', {
         'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
         'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
@@ -381,8 +386,15 @@ async def settings_page(request: Request, notice: str = '', test_error: str = ''
 @app.get('/ai-jobs', dependencies=[Depends(authenticate)])
 async def ai_jobs_page(request: Request, notice: str = ''):
     jobs, active = store.ai_jobs()
+    ai_config = store.ai_settings()
+    ai_cards = store.feed()
+    ai_config['total_cards'] = len(ai_cards)
+    ai_config['eligible_count'] = sum(not card.get('extraction') for card in ai_cards)
+    ai_config['ready'] = bool(ai_config['model_order']) and all(
+        ai_config['providers'][item['provider']]['configured'] for item in ai_config['model_order'])
     return templates.TemplateResponse(request, 'ai_jobs.html', {
         'csrf': csrf_token, 'jobs': jobs, 'active_job': active, 'notice': notice,
+        'ai_config': ai_config,
     })
 
 
@@ -464,7 +476,7 @@ async def save_ai_parallelism(value: int = Form(...)):
     return settings_redirect('Quantidade de jobs simultâneos salva.')
 
 
-@app.post('/settings/ai/jobs', dependencies=[Depends(authenticate), Depends(csrf)])
+@app.post('/ai-jobs', dependencies=[Depends(authenticate), Depends(csrf)])
 async def enqueue_ai_job(replace_existing: bool = Form(False)):
     try:
         job_id, count = store.enqueue_ai_job(replace_existing)
@@ -550,15 +562,16 @@ async def save_groups(chat_ids: list[int] = Form(default=[])):
 
 @app.post('/rules', dependencies=[Depends(authenticate), Depends(csrf)])
 async def add_rule(request: Request, background_tasks: BackgroundTasks,
-                   name: str = Form(..., max_length=100), keywords: str = Form(..., max_length=1000)):
-    valid = bool(name.strip() and any(w.strip() for w in keywords.split(',')))
+                   keyword: str = Form(..., max_length=100)):
+    term = keyword.strip()
+    valid = bool(term and ',' not in term)
     matched = 0
     if valid:
-        matched, alerts = store.add_rule(name.strip(), keywords.strip(), return_alerts=True)
+        matched, alerts = store.add_rule(term, return_alerts=True)
         for alert in alerts:
             background_tasks.add_task(telegram.notify_alert, alert)
     message = (f'Regra criada. Correspondências retroativas: {matched}; mensagens e edições futuras também serão verificadas.' if valid
-               else 'Informe um nome e pelo menos uma palavra-chave.')
+               else 'Informe uma palavra ou expressão sem vírgulas.')
     if 'application/json' in request.headers.get('accept', ''):
         return JSONResponse({'ok': valid, 'message': message, 'matched': matched},
                             status_code=200 if valid else 400, background=background_tasks)
@@ -569,7 +582,7 @@ async def add_rule(request: Request, background_tasks: BackgroundTasks,
 @app.get('/rules-page', dependencies=[Depends(authenticate)])
 async def rules_page(request: Request, notice: str = ''):
     return templates.TemplateResponse(request, 'rules.html', {'csrf': csrf_token, 'notice': notice,
-        'rules': store.rows('SELECT * FROM rules ORDER BY id DESC')})
+        'rules': store.rows('SELECT id,keywords FROM rules ORDER BY keywords COLLATE NOCASE,id DESC')})
 
 
 @app.post('/rules/{rule_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])

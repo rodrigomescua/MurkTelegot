@@ -118,7 +118,7 @@ class StoreTests(unittest.TestCase):
                           source_json='{"grouped_id": 50}')
         self.store.ingest(-100123, 14, 'Sem correspondência', '2026-11-04T12:00:04+00:00', None)
         self.store.execute('UPDATE offers SET seen=1 WHERE message_id IN (10,11)')
-        count = self.store.add_rule('Notebook', 'notebook')
+        count = self.store.add_rule('Notebook')
         self.assertEqual(count, 3)
         self.assertEqual({row['offer_id'] for row in self.store.rows(
             'SELECT h.offer_id FROM hits h JOIN rules r ON r.id=h.rule_id WHERE r.name=?', ('Notebook',))},
@@ -133,9 +133,30 @@ class StoreTests(unittest.TestCase):
         self.store.ingest(-100123, 11, 'Notebook no mesmo álbum', '2026-11-04T12:00:01+00:00', None,
                           source_json='{"grouped_id": 50}')
         self.store.ingest(-100123, 12, 'Notebook novo', '2026-11-04T12:00:02+00:00', None)
-        matched, alerts = self.store.add_rule('Notebook', 'notebook', return_alerts=True)
+        matched, alerts = self.store.add_rule('Notebook', return_alerts=True)
         self.assertEqual(matched, 2)
         self.assertEqual([alert['body'] for alert in alerts], ['Notebook no mesmo álbum', 'Notebook novo'])
+
+    def test_legacy_rules_split_by_term_and_preserve_matching_hits(self):
+        self.store.execute('UPDATE rules SET name=?,keywords=? WHERE id=1',
+                           ('Ofertas favoritas', 'café, notebook'))
+        self.ingest(body='Café puro')
+        self.store.ingest(-100123, 2, 'Notebook novo', '2026-11-04T12:00:01+00:00', None)
+        self.store.ingest(-100123, 3, 'Café com notebook', '2026-11-04T12:00:02+00:00', None)
+        self.store.execute("DELETE FROM settings WHERE key='rules_one_term_v1'")
+
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.rows('SELECT name,keywords FROM rules ORDER BY id'), [
+            {'name': 'café', 'keywords': 'café'}, {'name': 'notebook', 'keywords': 'notebook'},
+        ])
+        self.assertEqual({(row['body'], row['keywords']) for row in reopened.rows(
+            'SELECT o.body,r.keywords FROM hits h JOIN offers o ON o.id=h.offer_id JOIN rules r ON r.id=h.rule_id')}, {
+            ('Café puro', 'café'), ('Notebook novo', 'notebook'),
+            ('Café com notebook', 'café'), ('Café com notebook', 'notebook'),
+        })
+        self.assertTrue(Path(str(self.store.path) + '.before-rule-terms.db').exists())
+        Store(self.store.path)
+        self.assertEqual(len(reopened.rows('SELECT * FROM rules')), 2)
 
 
 class WebTests(unittest.TestCase):
@@ -160,7 +181,38 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('Seu radar está pronto', response.text)
         self.assertIn("frame-ancestors 'none'", response.headers['Content-Security-Policy'])
-        self.assertEqual(self.client.post('/rules', cookies=self.auth, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
+        self.assertEqual(self.client.post('/rules', cookies=self.auth, data={'keyword': 'x'}).status_code, 403)
+
+    def test_unread_counter_is_linked_and_present_on_all_pages(self):
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        main.store.add_rule('Notebook')
+        main.store.ingest(-100123, 1, 'Notebook oferta', '2026-11-07T12:00:00+00:00', None)
+        for path in ('/', '/alerts', '/telegram', '/rules-page', '/terms', '/groups',
+                     '/ignored', '/ai-jobs', '/settings'):
+            with self.subTest(path=path):
+                response = self.client.get(path, cookies=self.auth)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('id="alert-counter" class="unread-count" href="/alerts"', response.text)
+                self.assertIn('<strong>1</strong>', response.text)
+        count = self.client.get('/alerts/unread-count', cookies=self.auth)
+        self.assertEqual(count.json(), {'unread': 1})
+        self.assertEqual(TestClient(main.app).get('/alerts/unread-count', follow_redirects=False).status_code, 303)
+
+    def test_compact_page_titles_and_navigation_order(self):
+        home = self.client.get('/', cookies=self.auth).text
+        alerts = self.client.get('/alerts', cookies=self.auth).text
+        terms = self.client.get('/terms', cookies=self.auth).text
+        self.assertIn('<h1 class="page-title">Ofertas</h1>', home)
+        self.assertNotIn('RADAR PESSOAL', home)
+        self.assertNotIn('Ofertas que importam.', home)
+        self.assertIn('<h1 class="page-title">Alertas</h1>', alerts)
+        self.assertNotIn('Acompanhe suas ofertas por estado de leitura.', alerts)
+        self.assertNotIn('Termos formados apenas por números são ignorados.', terms)
+        self.assertNotIn('Veja palavras e expressões de até três palavras', terms)
+        nav = home.split('<div id="main-nav" class="main-nav">', 1)[1].split('</div>', 1)[0]
+        positions = [nav.index(f'href="{path}"') for path in
+                     ('/', '/alerts', '/rules-page', '/terms', '/telegram', '/groups', '/ignored', '/ai-jobs', '/settings')]
+        self.assertEqual(positions, sorted(positions))
 
     def test_ai_settings_use_auth_csrf_and_never_render_saved_keys(self):
         self.assertEqual(self.client.get('/settings', follow_redirects=False).status_code, 303)
@@ -237,17 +289,19 @@ class WebTests(unittest.TestCase):
 
     def test_ai_job_falls_back_and_extraction_is_prioritized_on_all_offer_screens(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
-        main.store.add_rule('Relógio', 'relógio')
+        main.store.add_rule('relógio')
         main.store.ingest(-100123, 1, 'Oferta original: relógio R$ 200', '2026-11-05T12:00:00+00:00', None)
         main.store.save_ai_settings('key-openai', 'key-router', [
             {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
         ])
-        response = self.client.post('/settings/ai/jobs', cookies=self.auth,
+        response = self.client.post('/ai-jobs', cookies=self.auth,
                                     data={'csrf': main.csrf_token, 'replace_existing': 'false'},
                                     follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertIn('/ai-jobs?notice=Job+', response.headers['location'])
+        self.assertNotIn('data-job-create', self.client.get('/settings', cookies=self.auth).text)
         jobs_page = self.client.get('/ai-jobs', cookies=self.auth)
+        self.assertIn('data-job-create', jobs_page.text)
         self.assertIn('Job #1', jobs_page.text)
         self.assertIn('Progresso do job', jobs_page.text)
         self.assertEqual(self.client.get('/ai-jobs/status', cookies=self.auth).status_code, 200)
@@ -502,10 +556,12 @@ class WebTests(unittest.TestCase):
 
     def test_quick_rule_validates_csrf_and_data(self):
         headers = {'Accept': 'application/json'}
-        self.assertEqual(self.client.post('/rules', cookies=self.auth, headers=headers, data={'name': 'x', 'keywords': 'x'}).status_code, 403)
-        invalid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'name': ' ', 'keywords': 'x'})
+        self.assertEqual(self.client.post('/rules', cookies=self.auth, headers=headers, data={'keyword': 'x'}).status_code, 403)
+        invalid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'keyword': ' '})
         self.assertEqual(invalid.status_code, 400)
-        valid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'name': 'Café', 'keywords': 'café'})
+        self.assertEqual(self.client.post('/rules', cookies=self.auth, headers=headers,
+            data={'csrf': main.csrf_token, 'keyword': 'café, notebook'}).status_code, 400)
+        valid = self.client.post('/rules', cookies=self.auth, headers=headers, data={'csrf': main.csrf_token, 'keyword': 'Café'})
         self.assertTrue(valid.json()['ok'])
         self.assertEqual(valid.json()['matched'], 0)
         self.assertEqual(main.store.rows('SELECT name FROM rules'), [{'name': 'Café'}])
@@ -518,7 +574,7 @@ class WebTests(unittest.TestCase):
                           source_json='{"grouped_id": 50}')
         with patch.object(main.telegram, 'notify_alert', new_callable=AsyncMock) as notify:
             response = self.client.post('/rules', cookies=self.auth, headers={'Accept': 'application/json'},
-                data={'csrf': main.csrf_token, 'name': 'Notebook', 'keywords': 'notebook'})
+                data={'csrf': main.csrf_token, 'keyword': 'notebook'})
         self.assertEqual(response.json()['matched'], 2)
         notify.assert_awaited_once()
         self.assertEqual(notify.await_args.args[0]['body'], 'Notebook capa')
@@ -527,12 +583,16 @@ class WebTests(unittest.TestCase):
         self.assertEqual(main.store.unread(), 1)
 
     def test_rule_management_has_own_page(self):
+        main.store.add_rule('Notebook')
         home = self.client.get('/', cookies=self.auth)
         self.assertNotIn('id="rules-list"', home.text)
         self.assertNotIn('id="quick-rule"', home.text)
         page = self.client.get('/rules-page', cookies=self.auth)
         self.assertEqual(page.status_code, 200)
         self.assertIn('id="rules-list"', page.text)
+        self.assertIn('id="rule-search"', page.text)
+        self.assertNotIn('name="name"', page.text)
+        self.assertIn('data-confirm="Remover a regra', page.text)
         self.assertEqual(self.client.get('/rules-page', follow_redirects=False).status_code, 303)
 
     def test_alert_offer_deletion_is_soft_authenticated_and_album_wide(self):
@@ -648,7 +708,7 @@ class WebTests(unittest.TestCase):
             self.assertEqual(asset.content, (Path('assets/murktelegot-logo') / name).read_bytes())
 
     def test_rule_offer_alert_read_and_delete(self):
-        self.assertEqual(self.post('/rules', {'name': 'Café', 'keywords': 'café'}).status_code, 200)
+        self.assertEqual(self.post('/rules', {'keyword': 'Café'}).status_code, 200)
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
         main.store.ingest(-100123, 1, '<script>alert(1)</script> café', '2026-11-04T12:00:00+00:00', 'https://t.me/c/123/1')
         response = self.client.get('/?alerts=true', cookies=self.auth)

@@ -148,7 +148,7 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual((row['id'], row['body'], row['seen']), (7, 'Oferta antiga', 1))
         self.assertIsNone(row['source_json'])
         self.assertEqual(migrated.rows('SELECT * FROM hits'), [{'offer_id': 7, 'rule_id': 3}])
-        self.assertEqual(migrated.rows('SELECT name FROM rules'), [{'name': 'Antiga'}])
+        self.assertEqual(migrated.rows('SELECT name FROM rules'), [{'name': 'antiga'}])
         self.assertIn('Oferta antiga', str(present(row)['html']))
         original_backup = backup.read_bytes()
         Store(path)
