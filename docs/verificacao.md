@@ -122,3 +122,10 @@ Release `v0.3.4`: commit `60d73bb`; push workflow `42289771505` e workflow de re
 133 testes `unittest` passaram com SQLite temporário. Incluem configuração autenticada/CSRF da concorrência, padrão 1, limite 1–8, claims concorrentes limitados atomicamente, migração aditiva de `queue_at` com snapshot, reenvio único após timeout e ordem FIFO, termos extraídos usados também na consulta paginada de ofertas, e alertas lidos ocultos da Home sem ocultar não lidos ou ofertas sem alerta. `bash -n run-dev.sh`, `node --check app/static/app.js`, `compileall` e `git diff --check` passaram.
 
 O Chromium do sistema validou Home e Configurações em 390 px e 1365 px com dados e imagens sintéticos: capas retrato/paisagem mantêm proporção e mostram a imagem inteira, os textos ocupam menos altura, o campo de concorrência está visível e não há overflow horizontal. As capturas foram inspecionadas. `tests/browser_term_offers.py` passou com toque móvel e desktop, incluindo leitura, exclusão/desfazer, paginação, lote e fallback sem JavaScript. Sem chamadas reais a Telegram ou provedores; timeout e cobranças reais não foram medidos.
+
+
+## Navegação compacta, regras individuais e release 0.5.0 — 2026-11-07
+
+136 testes `unittest` passaram com armazenamento temporário. `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. A validação Chromium registrada para esta implementação cobriu 390 px, 768 px e 1365 px; `tests/browser_selection.py` passou no Chromium móvel. Não houve aparelho físico nem integração real com Telegram/provedores.
+
+Release `v0.5.0`: commit `550fdf6`; workflows de push `42345739262` e release `42345750969` aprovados. GHCR confirmou `0.5.0` como índice OCI para `linux/amd64`, digest `sha256:ebb3f83e940bd6caf6e424d17cadba4bbcce8fc6e2a23a16072d9816fa2d01cd`. Appstore Runtipi atualizado no commit `4c3590e`, `tipi_version` 30; `bun test` passou com 462 testes e workflow `42345863034` aprovado. O push do appstore bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
