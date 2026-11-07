@@ -24,6 +24,10 @@ O usuário confirmou o login real no Telegram. Essa confirmação é distinta do
 
 Não há benchmark de desempenho nem teste de carga. O build e a execução de containers não foram feitos neste ambiente. A publicação GHCR é verificada no workflow da release; esse resultado não substitui testar a imagem no servidor de destino. Consulte os resultados de cada push no GitHub Actions para confirmar a suíte em Python 3.12.
 
+## Release 0.5.6 — 2026-11-07
+
+142 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile app/main.py app/store.py` e `git diff --check` passaram. Validação visual não executada por solicitação do usuário. Workflow de release [42418320284](https://github.com/rodrigomescua/MurkTelegot/actions/runs/42418320284) concluiu os jobs `test` e `publish` com sucesso para `v0.5.6`, confirmando a publicação no GHCR pelo workflow; digest OCI consultável não foi obtido neste ambiente. Catálogo Runtipi atualizado para `0.5.6` (`tipi_version` 36) e o workflow do catálogo passou com 462 testes. A atualização foi enviada diretamente após rebase, contornando a proteção por PR/status; corrigir o procedimento nas próximas publicações e usar PR com checks obrigatórios. O servidor local foi parado. Nenhuma atualização foi aplicada à instância Runtipi.
+
 ## Integração da identidade visual — 2026-11-04
 
 Logo no cabeçalho, favicon SVG e paleta azul verificados no Chromium, com a aplicação executada diretamente em Python e Telegram simulado. Layout desktop e largura de 320 px conferidos, sem transbordamento horizontal ou erros JavaScript. Repetidos os fluxos de login/2FA e seleção de 35 grupos. Contrastes calculados: texto do botão 7,06:1, links sobre cards 6,33:1, texto secundário 8,19:1 e bordas dos inputs 3,77:1. Esses checks não substituem uma auditoria completa de acessibilidade.
