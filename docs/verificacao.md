@@ -136,3 +136,9 @@ Release `v0.5.0`: commit `550fdf6`; workflows de push `42345739262` e release `4
 A navbar sticky foi verificada no Chromium em 1365 px (grade expandida), 768 px (painel hambúrguer em duas colunas) e 390 px (painel vertical). O ícone permaneceu visível ao rolar; abrir/fechar, Escape e devolução de foco passaram. Sem JavaScript, os links permanecem disponíveis em coluna no celular, sem overflow. Os 136 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não houve teste em aparelho físico.
 
 Release `v0.5.1`: commit `2a0267c`; workflow `42348091172` aprovou testes e publicação. GHCR confirmou `0.5.1` como índice OCI `linux/amd64`, digest `sha256:72322807428e0c0e6184ef80e4271bb68d4607cc0c7eefdd31c3012ed26db8be`. Appstore atualizado no commit `8cc9341`, versão `0.5.1`, `tipi_version` 31; 462 testes e workflow `42348214564` aprovados. O push bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
+
+## Release 0.5.2 e loja Runtipi — 2026-11-07
+
+136 testes `unittest` passaram; `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Não foi feita validação visual, conforme pedido do usuário. O servidor local em `192.168.0.10:8000` foi encerrado.
+
+Release `v0.5.2`: commit `6b48e08`; workflow de push `42351443739` e workflow da release `42351509661` aprovados. GHCR confirmou a tag `0.5.2` como índice OCI `linux/amd64`, digest `sha256:8b7282b4300521d0ac53737b66ce05b9beae3551cd15fe7471bba1a33178b815`. Appstore atualizado no commit `504687a`, versão `0.5.2`, `tipi_version` 32; `bun test` passou com 462 testes e workflow `42351638390` aprovado. O push do appstore bypassou regras de PR e status prévio; o CI após push passou. A instância Runtipi não foi atualizada.
