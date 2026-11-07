@@ -69,10 +69,7 @@ for number in range(1, 22):
             assert restored.ok
             page.goto(f'http://127.0.0.1:{port}/')
             home_card = page.locator(f'#{card_id}')
-            home_card.locator('[data-delete-offer] button').tap()
-            home_card.get_by_text('Oferta excluída.').wait_for()
-            home_card.get_by_role('button', name='Desfazer').tap()
-            home_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            assert home_card.count() == 0
 
             page.get_by_role('link', name='Termos frequentes').tap()
             page.wait_for_url('**/terms')

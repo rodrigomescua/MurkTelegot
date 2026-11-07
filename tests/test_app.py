@@ -182,6 +182,46 @@ class WebTests(unittest.TestCase):
         self.assertNotIn('private-key', page.text)
         self.assertIn('Chave configurada', page.text)
 
+    def test_ai_parallelism_setting_requires_auth_csrf_and_renders_saved_value(self):
+        self.assertEqual(self.client.post('/settings/ai/parallelism', data={'value': 2},
+                                          follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post('/settings/ai/parallelism', cookies=self.auth,
+                                          data={'csrf': 'invalid', 'value': 2}).status_code, 403)
+        response = self.client.post('/settings/ai/parallelism', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'value': 3}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        page = self.client.get('/settings', cookies=self.auth)
+        self.assertIn('name="value" type="number" min="1" max="8" value="3"', page.text)
+
+    def test_ai_provider_timeout_requeues_once_then_marks_item_failed(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100125, 'Grupo'))
+        main.store.ingest(-100125, 1, 'Oferta', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job(True)
+
+        async def hanging_extract(*_args):
+            await asyncio.Event().wait()
+
+        async def run():
+            with patch.object(main, 'AI_REQUEST_TIMEOUT', 0.01), patch.object(
+                    main, 'extract_ai', side_effect=hanging_extract):
+                job = main.store.claim_ai_job()
+                await main.process_ai_job(job)
+                self.assertEqual(main.store.rows('SELECT status FROM ai_jobs WHERE id=?',
+                                                 (job_id,))[0]['status'], 'queued')
+                job = main.store.claim_ai_job()
+                await main.process_ai_job(job)
+
+        asyncio.run(run())
+        self.assertEqual(main.store.rows('SELECT status FROM ai_jobs WHERE id=?',
+                                         (job_id,))[0]['status'], 'completed_with_errors')
+        self.assertEqual(main.store.rows('SELECT status FROM ai_job_items WHERE job_id=?',
+                                         (job_id,))[0]['status'], 'failed')
+        outcomes = [row['outcome'] for row in main.store.rows(
+            'SELECT outcome FROM ai_job_attempts WHERE job_id=? ORDER BY id', (job_id,))]
+        self.assertEqual(outcomes.count('retry'), 1)
+        self.assertEqual(outcomes.count('failed'), 3)
+
     def test_ai_catalog_uses_typed_key_without_persisting_it(self):
         self.assertEqual(self.client.post('/settings/ai/models', headers={'Accept': 'application/json'}, data={
             'csrf': main.csrf_token, 'provider': 'openai', 'api_key': 'no-session',
@@ -511,17 +551,20 @@ class WebTests(unittest.TestCase):
         self.client.post('/offers/1/seen', cookies=self.auth,
             data={'csrf': main.csrf_token, 'alerts': 'true'})
         home = self.client.get('/', cookies=self.auth)
-        self.assertIn('action="/offers/1/delete"', home.text)
+        self.assertNotIn('action="/offers/1/delete"', home.text)
         self.assertNotIn('id="telegram-panel"', home.text)
         telegram_page = self.client.get('/telegram', cookies=self.auth)
         self.assertIn('id="telegram-panel"', telegram_page.text)
         self.assertIn('action="/offers/3/delete"', home.text)
+        read_alerts = self.client.get('/alerts?read=true', cookies=self.auth)
+        self.assertIn('action="/offers/1/delete"', read_alerts.text)
         self.assertEqual(self.client.post('/offers/3/delete', cookies=self.auth,
             data={'csrf': main.csrf_token, 'alerts': 'false'}, follow_redirects=False).headers['location'], '/?notice=Oferta+removida.&q=')
         self.assertEqual(self.client.post('/offers/1/delete', data={'csrf': main.csrf_token},
                                           follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.post('/offers/1/delete', cookies=self.auth,
-            data={'csrf': main.csrf_token, 'q': 'Notebook'}, follow_redirects=False).status_code, 303)
+              data={'csrf': main.csrf_token, 'q': 'Notebook', 'alerts': 'true'},
+              follow_redirects=False).status_code, 303)
         self.assertEqual({row['message_id'] for row in main.store.rows('SELECT message_id FROM offers')}, {1, 2, 3})
         self.assertEqual(main.store.rows('SELECT count(*) AS n FROM offers WHERE deleted_at IS NOT NULL')[0]['n'], 3)
         self.assertEqual(main.store.rows('SELECT count(*) AS n FROM hits')[0]['n'], 2)

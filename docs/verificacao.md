@@ -116,3 +116,9 @@ A Home com cópia temporária do backup foi validada no Chromium: 29 cards em qu
 125 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. `bun test` da appstore passou com 462 testes. Nenhum banco pessoal foi usado; o servidor local foi encerrado.
 
 Release `v0.3.4`: commit `60d73bb`; push workflow `42289771505` e workflow de release `42289792145` aprovados. GHCR confirmou a tag `0.3.4`, digest `sha256:550151363df7ab98631fe6345ffaef1f6d8661de3a94dc35f31bdf8562e31aa5`, índice OCI publicado para AMD64. Appstore atualizada no commit `14c0b2e`, `tipi_version` 28; 462 testes e workflow `42290036751` aprovados. O push bypassou regras que exigiam PR e status prévio. A instância Runtipi não foi atualizada.
+
+## Fila de extração, termos e capas — 2026-11-07
+
+133 testes `unittest` passaram com SQLite temporário. Incluem configuração autenticada/CSRF da concorrência, padrão 1, limite 1–8, claims concorrentes limitados atomicamente, migração aditiva de `queue_at` com snapshot, reenvio único após timeout e ordem FIFO, termos extraídos usados também na consulta paginada de ofertas, e alertas lidos ocultos da Home sem ocultar não lidos ou ofertas sem alerta. `bash -n run-dev.sh`, `node --check app/static/app.js`, `compileall` e `git diff --check` passaram.
+
+O Chromium do sistema validou Home e Configurações em 390 px e 1365 px com dados e imagens sintéticos: capas retrato/paisagem mantêm proporção e mostram a imagem inteira, os textos ocupam menos altura, o campo de concorrência está visível e não há overflow horizontal. As capturas foram inspecionadas. `tests/browser_term_offers.py` passou com toque móvel e desktop, incluindo leitura, exclusão/desfazer, paginação, lote e fallback sem JavaScript. Sem chamadas reais a Telegram ou provedores; timeout e cobranças reais não foram medidos.

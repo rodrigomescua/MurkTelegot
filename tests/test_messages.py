@@ -99,7 +99,9 @@ class PersistenceTests(unittest.TestCase):
         self.assertEqual(self.store.unread(), 1)
         self.store.mark_seen(cards[0]['id'])
         self.assertEqual(self.store.unread(), 0)
-        self.assertTrue(all(p['seen'] for p in self.store.feed()[0]['parts']))
+        self.assertEqual(self.store.feed(), [])
+        self.assertTrue(all(row['seen'] for row in self.store.rows(
+            'SELECT seen FROM offers WHERE grouped_id=?', ('987',))))
 
     def test_edit_updates_media_entities_and_matches_without_duplicate(self):
         store_message(self.store, message(1))

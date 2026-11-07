@@ -19,9 +19,10 @@ from telethon import errors
 from app.ai import AIError, extract as extract_ai, list_models as list_ai_models
 from app.gotify import send_gotify, validate_gotify_token, validate_gotify_url
 from app.messages import media_info, present, preview_lines, source_data
-from app.store import Store
+from app.store import MAX_AI_PARALLELISM, Store
 from app.telegram import Telegram
 
+AI_REQUEST_TIMEOUT = 60
 logging.basicConfig(level=logging.INFO)
 
 
@@ -92,10 +93,14 @@ async def lifespan(app):
 
 
 async def ai_job_loop():
+    await asyncio.gather(*(ai_job_worker() for _ in range(MAX_AI_PARALLELISM)))
+
+
+async def ai_job_worker():
     while True:
         job = await asyncio.to_thread(store.claim_ai_job)
         if not job:
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
             continue
         await process_ai_job(job)
 
@@ -118,6 +123,7 @@ async def process_ai_job(job):
                 continue
             attempted = set()
             finished = False
+            had_failure = False
             while not finished:
                 if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
@@ -128,6 +134,9 @@ async def process_ai_job(job):
                               if (candidate['provider'], candidate['id'],
                                   hashlib.sha256(candidate['api_key'].encode()).digest()) not in attempted), None)
                 if not model:
+                    if had_failure and await asyncio.to_thread(
+                            store.requeue_failed_ai_item, job['id'], item['id'], 1):
+                        return
                     detail = ('Limite de 200 tentativas por oferta atingido.' if len(attempted) >= 200 else
                               'Nenhum modelo está configurado para as próximas tentativas.')
                     await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
@@ -144,7 +153,7 @@ async def process_ai_job(job):
                     if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                         request_task.cancel()
                     try:
-                        extraction = await request_task
+                        extraction = await asyncio.wait_for(request_task, timeout=AI_REQUEST_TIMEOUT)
                     finally:
                         ai_requests.pop(job['id'], None)
                 except asyncio.CancelledError:
@@ -156,6 +165,9 @@ async def process_ai_job(job):
                     finished = True
                 except (AIError, ValueError) as exc:
                     detail = str(exc)
+                    outcome = 'failed'
+                except asyncio.TimeoutError:
+                    detail = 'Tempo limite de 1 minuto excedido.'
                     outcome = 'failed'
                 except Exception:
                     detail = 'Falha interna ao consultar o modelo.'
@@ -176,6 +188,7 @@ async def process_ai_job(job):
                 await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
                                          model['provider'], model['id'], outcome, detail,
                                          int((time.monotonic() - started) * 1000))
+                had_failure = had_failure or outcome == 'failed'
                 if outcome == 'failed' and await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
                     finished = True
@@ -360,6 +373,7 @@ async def settings_page(request: Request, notice: str = '', test_error: str = ''
         'csrf': csrf_token, 'gotify_url': config['url'], 'gotify_enabled': config['enabled'],
         'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
         'frequent_terms_min_chars': store.frequent_terms_min_chars(),
+          'ai_parallelism': store.ai_parallelism(),
         'ai_config': ai_config,
     })
 
@@ -439,6 +453,15 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
     except (ValueError, TypeError) as exc:
         return settings_redirect(str(exc) or 'A ordem dos modelos é inválida.', error=True)
     return settings_redirect('Configuração de IA salva.')
+
+
+@app.post('/settings/ai/parallelism', dependencies=[Depends(authenticate), Depends(csrf)])
+async def save_ai_parallelism(value: int = Form(...)):
+    try:
+        store.save_ai_parallelism(value)
+    except ValueError as exc:
+        return settings_redirect(str(exc), error=True)
+    return settings_redirect('Quantidade de jobs simultâneos salva.')
 
 
 @app.post('/settings/ai/jobs', dependencies=[Depends(authenticate), Depends(csrf)])

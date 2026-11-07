@@ -3,6 +3,7 @@ import asyncio
 import sqlite3
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 import httpx
 from pathlib import Path
 from unittest.mock import patch
@@ -78,6 +79,51 @@ class AIStoreTests(unittest.TestCase):
         self.assertNotIn('secret-openai', repr(settings))
         self.assertEqual(Store(self.store.path).ai_api_key('openai'), 'secret-openai')
 
+    def test_parallelism_is_persisted_and_claimed_jobs_respect_the_limit(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        jobs = [self.store.enqueue_ai_job(True)[0] for _ in range(3)]
+        self.assertEqual(self.store.ai_parallelism(), 1)
+        self.assertEqual(self.store.claim_ai_job()['id'], jobs[0])
+        self.assertIsNone(self.store.claim_ai_job())
+        self.store.save_ai_parallelism(2)
+        self.assertEqual(Store(self.store.path).ai_parallelism(), 2)
+        self.assertEqual(self.store.claim_ai_job()['id'], jobs[1])
+        self.assertIsNone(self.store.claim_ai_job())
+        for invalid in (0, 9, 'invalid'):
+            with self.assertRaises(ValueError):
+                self.store.save_ai_parallelism(invalid)
+
+    def test_simultaneous_claims_never_exceed_configured_parallelism(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        for _ in range(8):
+            self.store.enqueue_ai_job(True)
+        self.store.save_ai_parallelism(3)
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            claims = list(workers.map(lambda _: self.store.claim_ai_job(), range(8)))
+        claimed = [job['id'] for job in claims if job]
+        self.assertEqual(len(claimed), 3)
+        self.assertEqual(len(set(claimed)), 3)
+
+    def test_failed_item_requeues_its_job_after_already_queued_jobs_once(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        first, _ = self.store.enqueue_ai_job(True)
+        second, _ = self.store.enqueue_ai_job(True)
+        self.store.save_ai_parallelism(2)
+        self.assertEqual(self.store.claim_ai_job()['id'], first)
+        item = self.store.claim_ai_item(first)
+        self.assertTrue(self.store.requeue_failed_ai_item(first, item['id']))
+        self.assertEqual(self.store.rows('SELECT status FROM ai_jobs WHERE id=?', (first,))[0]['status'], 'queued')
+        self.assertEqual(self.store.claim_ai_job()['id'], second)
+        self.assertEqual(self.store.cancel_ai_job(second), 'cancelling')
+        self.store.finish_ai_job(second)
+        self.assertEqual(self.store.claim_ai_job()['id'], first)
+        retried = self.store.claim_ai_item(first)
+        self.assertEqual(retried['id'], item['id'])
+        self.assertFalse(self.store.requeue_failed_ai_item(first, retried['id']))
+
     def test_old_database_gets_ai_tables_without_changing_offers(self):
         path = Path(self.tmp.name) / 'legacy.db'
         db = sqlite3.connect(path)
@@ -104,6 +150,8 @@ class AIStoreTests(unittest.TestCase):
         migrated = Store(path)
         columns = {row['name'] for row in migrated.rows('PRAGMA table_info(ai_jobs)')}
         self.assertIn('clear_requested', columns)
+        self.assertIn('queue_at', columns)
+        self.assertEqual(migrated.rows('SELECT queue_at FROM ai_jobs WHERE id=1'), [{'queue_at': 'now'}])
         self.assertEqual(migrated.rows('SELECT id,clear_requested FROM ai_jobs'),
                          [{'id': 1, 'clear_requested': 0}])
         backup = sqlite3.connect(str(path) + '.before-ai-job-cleanup.db')
@@ -113,6 +161,12 @@ class AIStoreTests(unittest.TestCase):
             self.assertEqual(backup.execute('SELECT id,status FROM ai_jobs').fetchone(), (1, 'completed'))
         finally:
             backup.close()
+        retry_backup = sqlite3.connect(str(path) + '.before-ai-job-retry.db')
+        try:
+            old_columns = {row[1] for row in retry_backup.execute('PRAGMA table_info(ai_jobs)')}
+            self.assertNotIn('queue_at', old_columns)
+        finally:
+            retry_backup.close()
 
     def test_clear_all_jobs_are_removed_after_restart_recovery(self):
         self.store.ingest(-1001, 1, 'Oferta ativa', '2026-11-01', None)

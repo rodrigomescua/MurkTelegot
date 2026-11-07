@@ -92,6 +92,18 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.feed(alerts=True, read=False), [])
         self.assertEqual(self.store.unread(), 0)
 
+    def test_home_hides_read_alerts_but_keeps_unread_alerts_and_non_alert_offers(self):
+        self.add_offer(1, 'Notebook alerta não lido')
+        self.add_offer(2, 'Notebook alerta lido')
+        self.add_offer(3, 'Oferta sem alerta')
+        self.store.mark_seen(2)
+        for message_id in (4, 5, 6, 7):
+            self.add_offer(message_id, f'Notebook álbum {message_id}', grouped=99 if message_id < 6 else 100)
+        self.store.mark_seen(4)
+        home = self.store.feed()
+        self.assertEqual({card['id'] for card in home}, {1, 3, 6})
+        self.assertEqual({card['id'] for card in self.store.feed(alerts=True, read=False)}, {1, 6})
+
     def test_new_offers_respect_filters_and_count_albums_once(self):
         self.add_offer(1, 'Notebook antigo', grouped=11)
         marker = self.store.rows('SELECT max(id) AS id FROM offers')[0]['id']

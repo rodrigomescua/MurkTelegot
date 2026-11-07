@@ -38,6 +38,39 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertNotIn('https', counts)
         self.assertNotIn('de', counts)
 
+    def test_extractions_replace_original_terms_and_empty_names_suppress_them(self):
+        plain = self.add(1, 'Cafeteira original')
+        unnamed = self.add(2, 'Cafeteira original')
+        album_root = self.add(3, 'Cafeteira original', 10)
+        self.add(4, 'Cafeteira original', 10)
+        for offer_id, name in ((plain, 'Cafeteira extraída'), (unnamed, ''), (album_root, 'Cafeteira extraída')):
+            self.store.execute('''INSERT INTO offer_extractions
+                (offer_id,product_name,job_id,updated_at) VALUES(?,?,1,'now')''', (offer_id, name))
+
+        terms = {normalize(term['word']): term['count'] for term in self.store.frequent_terms()}
+        self.assertEqual(terms[normalize('cafeteira extraída')], 2)
+        self.assertNotIn(normalize('cafeteira original'), terms)
+        self.assertNotIn('original', terms)
+        matching, total = self.store.term_offers('Cafeteira extraída')
+        self.assertEqual(total, 2)
+        self.assertEqual(sorted(len(card['parts']) for card in matching), [1, 2])
+        self.assertEqual(self.store.term_offers('Cafeteira original')[1], 0)
+
+    def test_extracted_terms_count_all_offers_across_pages(self):
+        for number in range(1, 106):
+            offer_id = self.add(number, 'Texto original diferente')
+            self.store.execute('''INSERT INTO offer_extractions
+                (offer_id,product_name,job_id,updated_at) VALUES(?,?,1,'now')''',
+                               (offer_id, 'Produto extraído'))
+        count = next(term['count'] for term in self.store.frequent_terms()
+                     if normalize(term['word']) == normalize('produto extraído'))
+        first, total = self.store.term_offers('produto extraído', 1, 100)
+        second, _ = self.store.term_offers('produto extraído', 2, 100)
+        self.assertEqual(count, 105)
+        self.assertEqual(total, 105)
+        self.assertEqual((len(first), len(second)), (100, 5))
+        self.assertEqual(self.store.term_offers('texto original')[1], 0)
+
     def test_numeric_and_short_terms_are_filtered_with_configurable_minimum(self):
         for number in (1, 2):
             self.add(number, '123 1234 tiny small medium larger')

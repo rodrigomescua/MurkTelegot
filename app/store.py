@@ -11,6 +11,9 @@ from collections import Counter
 from pathlib import Path
 
 
+MAX_AI_PARALLELISM = 8
+
+
 def normalize(text):
     return ''.join(c for c in unicodedata.normalize('NFKD', text.casefold()) if not unicodedata.combining(c))
 
@@ -54,6 +57,12 @@ def offer_term_groups(rows, ignored):
 def offer_body_terms(body):
     body = unicodedata.normalize('NFC', re.sub(r'https?://\S+|www\.\S+', ' ', body, flags=re.IGNORECASE))
     return term_phrases(body)
+
+
+def offer_term_texts(parts):
+    extracted = [part for part in parts if part['extraction_id'] is not None]
+    return ([part['product_name'] or '' for part in extracted] if extracted
+            else [part['body'] for part in parts])
 
 
 class Store:
@@ -102,7 +111,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS ai_jobs (
                     id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
                     models_json TEXT NOT NULL, created_at TEXT NOT NULL,
-                    started_at TEXT, finished_at TEXT, clear_requested INTEGER NOT NULL DEFAULT 0);
+                    started_at TEXT, finished_at TEXT, clear_requested INTEGER NOT NULL DEFAULT 0,
+                    queue_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS ai_job_items (
                     id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
                     position INTEGER NOT NULL, offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
@@ -134,6 +144,21 @@ class Store:
                     finally:
                         temporary.unlink(missing_ok=True)
                 db.execute('ALTER TABLE ai_jobs ADD COLUMN clear_requested INTEGER NOT NULL DEFAULT 0')
+            if 'queue_at' not in job_columns:
+                backup = Path(str(path) + '.before-ai-job-retry.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                db.execute('ALTER TABLE ai_jobs ADD COLUMN queue_at TEXT')
+                db.execute('UPDATE ai_jobs SET queue_at=created_at WHERE queue_at IS NULL')
             db.execute('''DELETE FROM ignored_keywords
                           WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
@@ -181,6 +206,24 @@ class Store:
             'openai': {'configured': bool(settings.get('ai_openai_key')), 'models': [i['id'] for i in order if i['provider'] == 'openai']},
             'openrouter': {'configured': bool(settings.get('ai_openrouter_key')), 'models': [i['id'] for i in order if i['provider'] == 'openrouter']},
         }, 'model_order': order}
+
+    def ai_parallelism(self):
+        rows = self.rows("SELECT value FROM settings WHERE key='ai_parallelism'")
+        try:
+            return min(MAX_AI_PARALLELISM, max(1, int(rows[0]['value']))) if rows else 1
+        except (TypeError, ValueError):
+            return 1
+
+    def save_ai_parallelism(self, value):
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f'A quantidade de jobs simultâneos deve ser um número entre 1 e {MAX_AI_PARALLELISM}.') from None
+        if not 1 <= value <= MAX_AI_PARALLELISM:
+            raise ValueError(f'A quantidade de jobs simultâneos deve ser um número entre 1 e {MAX_AI_PARALLELISM}.')
+        with self.connect() as db:
+            db.execute('''INSERT INTO settings(key,value) VALUES('ai_parallelism',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (str(value),))
 
     def ai_api_key(self, provider, supplied=''):
         if provider not in ('openai', 'openrouter'):
@@ -274,8 +317,9 @@ class Store:
                     return None, 0
                 raise ValueError('Não há ofertas elegíveis para processar na Home padrão.')
             created = datetime.now(timezone.utc).isoformat(timespec='seconds')
-            job_id = db.execute('''INSERT INTO ai_jobs(status,replace_existing,models_json,created_at)
-                VALUES('queued',?,?,?)''', (int(bool(replace_existing)), json.dumps(models), created)).lastrowid
+            queue_at = datetime.now(timezone.utc).isoformat(timespec='microseconds')
+            job_id = db.execute('''INSERT INTO ai_jobs(status,replace_existing,models_json,created_at,queue_at)
+                VALUES('queued',?,?,?,?)''', (int(bool(replace_existing)), json.dumps(models), created, queue_at)).lastrowid
             db.executemany('''INSERT INTO ai_job_items(job_id,position,offer_id,chat_id,message_id)
                 VALUES(?,?,?,?,?)''', [(job_id, index, card['id'], card['chat_id'], card['message_id'])
                                        for index, card in enumerate(cards)])
@@ -293,13 +337,39 @@ class Store:
     def claim_ai_job(self):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            job = db.execute('''SELECT * FROM ai_jobs WHERE status='queued' AND NOT EXISTS
-                (SELECT 1 FROM ai_jobs WHERE status='running') ORDER BY id LIMIT 1''').fetchone()
+            setting = db.execute("SELECT value FROM settings WHERE key='ai_parallelism'").fetchone()
+            try:
+                limit = min(8, max(1, int(setting['value']))) if setting else 1
+            except (TypeError, ValueError):
+                limit = 1
+            running = db.execute("SELECT count(*) FROM ai_jobs WHERE status IN ('running','cancelling')").fetchone()[0]
+            if running >= limit:
+                return None
+            job = db.execute("SELECT * FROM ai_jobs WHERE status='queued' ORDER BY queue_at,id LIMIT 1").fetchone()
             if not job:
                 return None
             now = datetime.now(timezone.utc).isoformat(timespec='seconds')
             db.execute("UPDATE ai_jobs SET status='running',started_at=? WHERE id=?", (now, job['id']))
             return {**dict(job), 'status': 'running', 'started_at': now}
+
+    def requeue_failed_ai_item(self, job_id, item_id, max_retries=1):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute("SELECT status FROM ai_jobs WHERE id=?", (job_id,)).fetchone()
+            item = db.execute('SELECT * FROM ai_job_items WHERE id=? AND job_id=?', (item_id, job_id)).fetchone()
+            retries = db.execute("SELECT count(*) FROM ai_job_attempts WHERE item_id=? AND outcome='retry'",
+                                 (item_id,)).fetchone()[0]
+            if not job or job['status'] != 'running' or not item or retries >= max_retries:
+                return False
+            now = datetime.now(timezone.utc).isoformat(timespec='microseconds')
+            position = db.execute('SELECT coalesce(max(position),-1)+1 FROM ai_job_items WHERE job_id=?',
+                                  (job_id,)).fetchone()[0]
+            db.execute("UPDATE ai_job_items SET status='queued',position=? WHERE id=?", (position, item_id))
+            db.execute("UPDATE ai_jobs SET status='queued',started_at=NULL,queue_at=? WHERE id=?", (now, job_id))
+            db.execute('''INSERT INTO ai_job_attempts(job_id,item_id,provider,model,outcome,detail,duration_ms,created_at)
+                VALUES(?,?, 'sistema','-','retry',?,0,?)''',
+                       (job_id, item_id, f'Reenvio {retries + 1} de {max_retries} após falha dos modelos.', now))
+            return True
 
     def claim_ai_item(self, job_id):
         with self.connect() as db:
@@ -462,7 +532,10 @@ class Store:
             job['skipped'] = job['skipped'] or 0
             job['cancelled'] = job['cancelled'] or 0
             job['logs'] = by_job[job['id']]
-        active = next((job for job in reversed(jobs) if job['status'] in ('queued', 'running', 'cancelling')), None)
+        active = min((job for job in jobs if job['status'] in ('queued', 'running', 'cancelling')),
+                     key=lambda job: (0 if job['status'] == 'running' else
+                                      1 if job['status'] == 'cancelling' else 2,
+                                      job['queue_at'], job['id']), default=None)
         return jobs, active
 
     def ai_job_status(self):
@@ -475,7 +548,8 @@ class Store:
                 sum(CASE WHEN i.status='cancelled' THEN 1 ELSE 0 END) AS cancelled
                 FROM ai_jobs j LEFT JOIN ai_job_items i ON i.job_id=j.id
                 WHERE j.status IN ('queued','running','cancelling') GROUP BY j.id
-                ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'cancelling' THEN 1 ELSE 2 END,j.id LIMIT 1''').fetchone()
+                  ORDER BY CASE j.status WHEN 'running' THEN 0 WHEN 'cancelling' THEN 1 ELSE 2 END,
+                           j.queue_at,j.id LIMIT 1''').fetchone()
         if not row:
             return None
         result = dict(row)
@@ -558,12 +632,14 @@ class Store:
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
             minimum = self.frequent_terms_min_chars()
-            rows = db.execute('SELECT id,chat_id,grouped_id,body FROM offers WHERE deleted_at IS NULL ORDER BY chat_id,grouped_id,id').fetchall()
+            rows = db.execute('''SELECT o.id,o.chat_id,o.grouped_id,o.body,e.offer_id AS extraction_id,
+                    e.product_name FROM offers o LEFT JOIN offer_extractions e ON e.offer_id=o.id
+                    WHERE o.deleted_at IS NULL ORDER BY o.chat_id,o.grouped_id,o.id''').fetchall()
         hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
         for parts in offer_term_groups(rows, ignored):
             terms = {}
-            for part in parts:
-                for word, first, last in offer_body_terms(part['body']):
+            for text in offer_term_texts(parts):
+                for word, first, last in offer_body_terms(text):
                     normalized = normalize(word)
                     if (len(word) <= 100 and len(normalized) >= minimum and
                         not normalized.isdigit() and
@@ -583,13 +659,15 @@ class Store:
             db.execute('BEGIN')
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             rows = [dict(row) for row in db.execute(
-                '''SELECT o.*,
+              '''SELECT o.*,e.offer_id AS extraction_id,e.product_name,
                     (SELECT group_concat(r.name, ', ') FROM hits h JOIN rules r ON r.id=h.rule_id
-                     WHERE h.offer_id=o.id) AS rules
-                   FROM offers o WHERE o.deleted_at IS NULL ORDER BY o.date DESC,o.id DESC''')]
+                       WHERE h.offer_id=o.id) AS rules
+                     FROM offers o LEFT JOIN offer_extractions e ON e.offer_id=o.id
+                     WHERE o.deleted_at IS NULL ORDER BY o.date DESC,o.id DESC''')]
         matching = [parts for parts in offer_term_groups(rows, ignored)
                     if any(normalize(phrase) == normalized
-                           for part in parts for phrase, _, _ in offer_body_terms(part['body']))]
+                             for text in offer_term_texts(parts)
+                             for phrase, _, _ in offer_body_terms(text))]
         total = len(matching)
         selected = matching[(page - 1) * per_page:page * per_page]
         cards = []
@@ -761,6 +839,11 @@ class Store:
             clauses.append('''NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
                 SELECT 1 FROM offers m WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
                   AND ignored_offer(m.body)))''')
+            alert_group = '''(a.id=o.id OR (o.grouped_id IS NOT NULL AND a.chat_id=o.chat_id
+                AND a.grouped_id=o.grouped_id))'''
+            clauses.append(f'''(NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                WHERE {alert_group}) OR EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                WHERE {alert_group} AND a.seen=0))''')
         if q:
             clauses.append("body LIKE ? ESCAPE '\\'")
             args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
