@@ -636,7 +636,7 @@ async def add_ignored(request: Request, word: str = Form(..., max_length=100)):
 
 @app.post('/ignored/{word_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
 async def delete_ignored(request: Request, word_id: int):
-    store.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
+    store.remove_ignored(word_id)
     if 'application/json' in request.headers.get('accept', ''):
         return {'ok': True, 'message': 'Palavra removida do filtro.'}
     return ignored_redirect('Palavra removida do filtro.')

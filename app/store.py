@@ -99,7 +99,7 @@ class Store:
                     id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
                     chat_title TEXT NOT NULL, body TEXT NOT NULL, url TEXT,
                     date TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
-                    source_json TEXT, grouped_id TEXT, deleted_at TEXT,
+                    source_json TEXT, grouped_id TEXT, deleted_at TEXT, ignored_at TEXT,
                     UNIQUE(chat_id, message_id));
                 CREATE TABLE IF NOT EXISTS hits (
                     offer_id INTEGER NOT NULL REFERENCES offers(id),
@@ -156,8 +156,21 @@ class Store:
                 END;
             ''')
             if columns:
+                if 'ignored_at' not in columns:
+                    backup = Path(str(path) + '.before-ignored-at.db')
+                    if not backup.exists():
+                        temporary = Path(str(backup) + '.tmp')
+                        try:
+                            snapshot = sqlite3.connect(temporary)
+                            try:
+                                db.backup(snapshot)
+                            finally:
+                                snapshot.close()
+                            os.replace(temporary, backup)
+                        finally:
+                            temporary.unlink(missing_ok=True)
                 db.execute('BEGIN')
-                for name in ('source_json', 'grouped_id', 'deleted_at'):
+                for name in ('source_json', 'grouped_id', 'deleted_at', 'ignored_at'):
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
             job_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_jobs)')}
@@ -708,8 +721,51 @@ class Store:
         if len(normalized) < minimum or normalized.isdigit():
             raise ValueError(f'Use pelo menos {minimum} caracteres e não informe apenas números.')
         with self.connect() as db:
-            return db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
-                              (word, normalized)).rowcount == 1
+            old_words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
+            rows = db.execute('SELECT id,chat_id,grouped_id,body,ignored_at FROM offers WHERE deleted_at IS NULL').fetchall()
+            old_hidden = {(r['chat_id'], r['grouped_id'] if r['grouped_id'] is not None else ('offer', r['id']))
+                          for r in rows if any(ignored_matches(r['body'], w) for w in old_words)}
+            inserted = db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
+                                  (word, normalized)).rowcount == 1
+            if inserted:
+                now = datetime.now(timezone.utc).isoformat()
+                words = old_words + [normalized]
+                for row in rows:
+                    key = (row['chat_id'], row['grouped_id'] if row['grouped_id'] is not None else ('offer', row['id']))
+                    if key not in old_hidden and any(ignored_matches(row['body'], w) for w in words):
+                        if row['grouped_id'] is None:
+                            db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?', (now, row['id']))
+                        else:
+                            db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
+                                       (now, row['chat_id'], row['grouped_id']))
+            return inserted
+
+    def _refresh_ignored_at(self, db, chat_id, grouped_id, offer_id, was_ignored):
+        rows = db.execute('SELECT id,body FROM offers WHERE chat_id=? AND grouped_id=?' if grouped_id is not None
+                          else 'SELECT id,body FROM offers WHERE id=?',
+                          (chat_id, grouped_id) if grouped_id is not None else (offer_id,)).fetchall()
+        words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
+        if any(ignored_matches(row['body'], word) for row in rows for word in words):
+            now = datetime.now(timezone.utc).isoformat()
+            if grouped_id is not None and not was_ignored:
+                db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
+                           (now, chat_id, grouped_id))
+            elif grouped_id is None and not was_ignored:
+                db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?', (now, offer_id))
+        elif grouped_id is not None:
+            db.execute('UPDATE offers SET ignored_at=NULL WHERE chat_id=? AND grouped_id=?', (chat_id, grouped_id))
+        else:
+            db.execute('UPDATE offers SET ignored_at=NULL WHERE id=?', (offer_id,))
+
+    def remove_ignored(self, word_id):
+        with self.connect() as db:
+            db.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
+            self._register_ignored_filter(db)
+            db.execute('''UPDATE offers SET ignored_at=NULL WHERE ignored_at IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM offers m WHERE m.chat_id=offers.chat_id
+                  AND ((offers.grouped_id IS NULL AND m.id=offers.id)
+                    OR (offers.grouped_id IS NOT NULL AND m.grouped_id=offers.grouped_id))
+                  AND ignored_offer(m.body))''')
 
     def frequent_terms(self):
         # Count each phrase once per offer, including an album's separate messages.
@@ -820,6 +876,12 @@ class Store:
                 return
             previous = db.execute('SELECT id,body,grouped_id,deleted_at FROM offers WHERE chat_id=? AND message_id=?',
                                   (chat_id, message_id)).fetchone()
+            prior_group = db.execute('SELECT id,body FROM offers WHERE chat_id=? AND grouped_id=?' if grouped is not None
+                                     else 'SELECT id,body FROM offers WHERE id=?',
+                                     (chat_id, str(grouped)) if grouped is not None else
+                                     (previous['id'],) if previous else (-1,)).fetchall()
+            words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
+            was_ignored = any(ignored_matches(row['body'], word) for row in prior_group for word in words)
             had_alert = False
             if report_alert:
                 had_alert = bool(db.execute('''SELECT 1 FROM offers o JOIN hits h ON h.offer_id=o.id
@@ -857,6 +919,7 @@ class Store:
                 if matches(body or '', rule['keywords']):
                     db.execute('INSERT INTO hits VALUES(?,?)', (offer_id, rule['id']))
                     matched.append(rule['name'])
+            self._refresh_ignored_at(db, chat_id, current_group, offer_id, was_ignored)
             if report_alert:
                 return offer_id, {'offer_id': offer_id, 'chat_id': chat_id, 'message_id': message_id,
                                   'grouped_id': str(grouped) if grouped is not None else None, 'source': 'telegram',
@@ -958,7 +1021,7 @@ class Store:
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
         selected = [dict(row) for row in db.execute(select + where +
-                         (' ORDER BY julianday(coalesce(deleted_at,date)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
+                         (' ORDER BY julianday(coalesce(deleted_at,ignored_at)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
                          + ('' if deleted else ' LIMIT 100'), args)]
         keys = {(r['chat_id'], r['grouped_id']) for r in selected if r['grouped_id']}
         albums = {}
@@ -982,13 +1045,10 @@ class Store:
                 manual_times = [datetime.fromisoformat(p['deleted_at'].replace('Z', '+00:00'))
                                 for p in parts if p['deleted_at']]
                 card['deletion_reason'] = 'manual' if manual_times else 'ignored'
-                if manual_times:
-                    card['physical_delete_at'] = (max(manual_times) + timedelta(hours=1)).isoformat()
-                elif card['rules']:
-                    card['physical_delete_at'] = None
-                else:
-                    dates = [datetime.fromisoformat(p['date'].replace('Z', '+00:00')) for p in parts]
-                    card['physical_delete_at'] = (max(dates) + timedelta(hours=4)).isoformat()
+                ignored_times = [datetime.fromisoformat(p['ignored_at'].replace('Z', '+00:00'))
+                                 for p in parts if p['ignored_at']]
+                deletion_times = manual_times or ignored_times
+                card['deletion_at'] = max(deletion_times).isoformat() if deletion_times else None
             cards.append(card)
         self._attach_extractions(cards, db)
         return cards

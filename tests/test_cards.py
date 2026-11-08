@@ -87,3 +87,30 @@ class OfferCardTests(unittest.TestCase):
         self.assertIn('class="offer-cover"', summary)
         self.assertIn('class="offer-overview"', summary)
         self.assertNotIn('Ver oferta completa', response.text)
+
+    def test_deleted_page_renders_non_spoiler_cover_and_keeps_placeholders(self):
+        image_id = self.add(1, 'Oferta removida com imagem', {
+            'media': {'_': 'MessageMediaPhoto', 'photo': {'_': 'Photo', 'id': 12}}})
+        no_image_id = self.add(2, 'Oferta removida sem imagem', {'_': 'Message'})
+        spoiler_id = self.add(3, 'Oferta removida com spoiler', {
+            'media': {'_': 'MessageMediaPhoto', 'photo': {'_': 'Photo', 'id': 13}, 'spoiler': True}})
+        for offer_id in (image_id, no_image_id, spoiler_id):
+            self.store.execute('UPDATE offers SET deleted_at=? WHERE id=?', ('2026-11-04T00:00:00+00:00', offer_id))
+
+        response = self.client.get('/deleted', cookies=self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data-date-only', response.text)
+        self.assertIn('>2026-11-04</time>', response.text)
+        self.assertNotIn('exclusão física prevista', response.text)
+        image_card = re.search(r'<article class="offer-card" id="offer-%s">(.*?)</article>' % image_id,
+                               response.text, re.S).group(1)
+        self.assertIn(f'src="/offers/{image_id}/media"', image_card)
+        no_image_card = re.search(r'<article class="offer-card" id="offer-%s">(.*?)</article>' % no_image_id,
+                                  response.text, re.S).group(1)
+        self.assertIn('Sem imagem', no_image_card)
+        spoiler_card = re.search(r'<article class="offer-card" id="offer-%s">(.*?)</article>' % spoiler_id,
+                                 response.text, re.S).group(1)
+        spoiler_summary = re.search(r'<summary class="offer-summary">(.*?)</summary>', spoiler_card, re.S).group(1)
+        self.assertIn('Mídia com spoiler', spoiler_card)
+        self.assertNotIn(f'src="/offers/{spoiler_id}/media"', spoiler_summary)

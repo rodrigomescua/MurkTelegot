@@ -34,6 +34,14 @@ Não há benchmark de desempenho nem teste de carga. O build e a execução de c
 
 Publicação `v0.5.7`: commit `ed716301d1d7d21dc9929ff1a5d7974f457c7c72`; workflow `42429659630` aprovou `test` e `publish`. Manifesto GHCR da tag `0.5.7` confirmou `linux/amd64`, digest `sha256:9400d7990296693aa1f2b662b6846028fcf39fbd9e845c207b38ac559297cc9c`. Catálogo Runtipi atualizado via PR [1459](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1459), merge `bdc897a9f234a5dc455283da8bf534e9a0a243a8`; checks `test`/`renovate` e workflow pós-merge `42429834064` passaram (462 testes). Catálogo e Compose estão em `0.5.7`, `tipi_version` 37. Instância Runtipi não atualizada.
 
+## Capas em excluídas recentes e exibição de datas — 2026-11-07
+
+145 testes `unittest` passaram; Chromium com oferta e cache de imagem sintéticos verificou capa carregada na tela `/deleted` em viewport 1365 px e 390 px, sem overflow no celular ou erros JavaScript. A imagem carregou pela rota autenticada. Em contexto `America/Sao_Paulo`, o teste mostrou `09:00` para timestamp `12:00+00:00`, incluindo a previsão de purga; o HTML sem transformação mantém o rótulo fallback `UTC`. Não houve acesso à instância/banco Runtipi nem Telegram real.
+
+## Datas de exclusão lógica em `/deleted` — 2026-11-07
+
+A coluna aditiva `offers.ignored_at` registra novas transições para ocultação por palavra ignorada, inclusive backfill de ofertas existentes quando uma nova palavra as oculta. Sobreposições preservam o primeiro timestamp; remover a última palavra correspondente limpa a data. Migração cria backup e mantém ofertas antigas sem horário conhecido como `NULL`. `/deleted` ordena `deleted_at` e `ignored_at` juntos em ordem decrescente, deixa datas antigas ausentes no fim e mostra apenas o dia no fuso local quando JavaScript está disponível. A previsão de exclusão física foi removida da tela; as rotinas e prazos de retenção não foram alterados. 147 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Validação visual não executada por solicitação do usuário.
+
 ## Integração da identidade visual — 2026-11-04
 
 Logo no cabeçalho, favicon SVG e paleta azul verificados no Chromium, com a aplicação executada diretamente em Python e Telegram simulado. Layout desktop e largura de 320 px conferidos, sem transbordamento horizontal ou erros JavaScript. Repetidos os fluxos de login/2FA e seleção de 35 grupos. Contrastes calculados: texto do botão 7,06:1, links sobre cards 6,33:1, texto secundário 8,19:1 e bordas dos inputs 3,77:1. Esses checks não substituem uma auditoria completa de acessibilidade.

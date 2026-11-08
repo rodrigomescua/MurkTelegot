@@ -143,8 +143,10 @@ function formatTimes(root) {
 for (const time of root.querySelectorAll('time[datetime]')) {
   const date = new Date(time.dateTime);
   if (!Number.isNaN(date.getTime())) {
-    time.textContent = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(date);
-    time.title = 'Horário local do seu navegador';
+    time.textContent = new Intl.DateTimeFormat('pt-BR', time.hasAttribute('data-date-only')
+      ? { dateStyle: 'short' }
+      : { dateStyle: 'short', timeStyle: 'short' }).format(date);
+    if (!time.hasAttribute('data-date-only')) time.title = 'Horário local do seu navegador';
   }
 }
 

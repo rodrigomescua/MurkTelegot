@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,6 +54,38 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(len(self.store.feed()), 3)
         self.assertEqual(self.store.unread(), 3)
 
+    def test_ignored_timestamp_backfills_new_match_and_preserves_overlapping_rules(self):
+        self.add_offer(1, 'Oferta PS5 Slim e Xbox Series')
+        self.assertTrue(self.store.add_ignored('PS5 Slim'))
+        first = self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at']
+        self.assertTrue(first)
+        self.store.add_ignored('Xbox Series')
+        self.assertEqual(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'], first)
+        ps5_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='ps5 slim'")[0]['id']
+        self.store.remove_ignored(ps5_id)
+        self.store.ingest(-100123, 1, 'Oferta Xbox Series', '2026-11-04', None)
+        self.assertEqual(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'], first)
+        xbox_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='xbox series'")[0]['id']
+        self.store.remove_ignored(xbox_id)
+        self.assertIsNone(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+        self.store.ingest(-100123, 1, 'Oferta visível', '2026-11-04', None)
+        self.assertIsNone(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+
+    def test_ignored_timestamp_migration_leaves_previously_hidden_rows_null(self):
+        self.add_offer(1, 'PS5 Slim antigo')
+        self.store.add_ignored('PS5 Slim')
+        self.store.execute('ALTER TABLE offers DROP COLUMN ignored_at')
+        reopened = Store(self.store.path)
+        self.assertIsNone(reopened.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+        reopened.ingest(-100123, 1, 'PS5 Slim antigo editado', '2026-11-04', None)
+        self.assertIsNone(reopened.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+        backup = sqlite3.connect(str(self.store.path) + '.before-ignored-at.db')
+        try:
+            self.assertNotIn('ignored_at', {row[1] for row in backup.execute('PRAGMA table_info(offers)')})
+            self.assertEqual(backup.execute('SELECT body FROM offers WHERE message_id=1').fetchone()[0], 'PS5 Slim antigo')
+        finally:
+            backup.close()
+
     def test_ignore_album_if_any_part_matches_but_keep_alert_and_other_chat(self):
         self.store.add_ignored('PS5 Slim')
         self.add_offer(1, 'Notebook', grouped=55)
@@ -83,15 +116,19 @@ class IgnoredWordsTests(unittest.TestCase):
         self.store.ingest(-100123, 1, 'PS5 Slim ignorado', (now - timedelta(minutes=5)).isoformat(), None)
         manual_id = self.store.ingest(-100123, 2, 'Oferta excluída manualmente', now.isoformat(), None)
         self.store.delete_offer(manual_id)
+        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=?', ((now - timedelta(minutes=10)).isoformat(), manual_id))
         for message_id in range(3, 104):
             self.store.ingest(-100123, message_id, 'PS5 Slim ignorado',
                               (now - timedelta(minutes=5)).isoformat(), None)
+        self.store.execute('UPDATE offers SET ignored_at=NULL WHERE message_id=1')
         offers = self.store.feed(deleted=True)
-        self.assertEqual(offers[0]['deletion_reason'], 'manual')
-        self.assertTrue(all(offer['deletion_reason'] == 'ignored' for offer in offers[1:]))
+        self.assertEqual(offers[0]['deletion_reason'], 'ignored')
+        self.assertEqual(offers[-2]['deletion_reason'], 'manual')
+        self.assertIsNone(offers[-1]['deletion_at'])
+        self.assertTrue(all(offer['deletion_reason'] == 'ignored' for offer in offers[:-2]))
         self.assertEqual(len(offers), 103)
-        self.assertIn('physical_delete_at', offers[0])
-        self.assertIn('physical_delete_at', offers[1])
+        self.assertGreater(offers[0]['deletion_at'], offers[-2]['deletion_at'])
+        self.assertIsNone(offers[0].get('physical_delete_at'))
 
     def test_read_sections_keep_album_together_and_filter_before_limit(self):
         self.add_offer(1, 'Notebook parte 1', grouped=55)
