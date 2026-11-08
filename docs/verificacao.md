@@ -207,3 +207,8 @@ Release `v0.5.5`: commit `0cb157f`; workflows de push `42356626743` e release `4
 ## Release 0.5.10 e atualização da loja Runtipi — 2026-11-08
 
 O app local não estava em execução. A suíte passou com 149 testes; `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. Commit `9a19197` enviado para `main`; workflow de push `42444949806` passou. Release `v0.5.10`, workflow `42444983743`, concluiu `test` e `publish`. Manifesto GHCR verificado: `ghcr.io/rodrigomescua/murktelegot:0.5.10`, índice OCI `sha256:904dd7f77011cf281c1e9af369990ce95f95af39a8f0207ca805209fba2d59d8`, plataforma `linux/amd64`. O catálogo foi atualizado pela PR [1465](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1465), merge `4fa1e83`; checks `test`/`renovate` passaram (runs `42445177431`/`42445177401`) e CI pós-merge `42445256452` passou com 462 testes. `tipi_version` passou de 39 para 40. Appstore local sincronizado. A instância Runtipi não foi atualizada; preserve o volume ao atualizar manualmente.
+
+
+## Release 0.5.12 e loja Runtipi — 2026-11-08
+
+Commit `132492a` enviado a `main`; CI de push `42523438261` passou. Release `v0.5.12` no mesmo commit; workflow `42523550148` aprovou `test` e `publish`. GHCR confirmou `ghcr.io/rodrigomescua/murktelegot:0.5.12`, índice OCI `sha256:16f21a967d4e8362408108225a7d0b25bf0150d1194505367440b466a9855a26`, plataforma `linux/amd64`. Catálogo Runtipi atualizado pela PR [1469](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1469), merge `701bfbc`; checks `test`/`renovate` passaram e CI pós-merge `42524031012` passou com 462 testes. `tipi_version` passou de 41 para 42. A instância Runtipi não foi atualizada.
