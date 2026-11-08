@@ -30,6 +30,7 @@ def ignored_matches(text, word):
 
 
 def ignored_pattern(words):
+    words = tuple(words)
     return re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, words)) + r')(?![^\W_])') if words else None
 
 
@@ -99,7 +100,7 @@ class Store:
                     id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
                     chat_title TEXT NOT NULL, body TEXT NOT NULL, url TEXT,
                     date TEXT NOT NULL, seen INTEGER NOT NULL DEFAULT 0,
-                    source_json TEXT, grouped_id TEXT, deleted_at TEXT, ignored_at TEXT,
+                    source_json TEXT, grouped_id TEXT, deleted_at TEXT, ignored_at TEXT, ignored_word TEXT,
                     UNIQUE(chat_id, message_id));
                 CREATE TABLE IF NOT EXISTS hits (
                     offer_id INTEGER NOT NULL REFERENCES offers(id),
@@ -156,8 +157,11 @@ class Store:
                 END;
             ''')
             if columns:
-                if 'ignored_at' not in columns:
-                    backup = Path(str(path) + '.before-ignored-at.db')
+                for column, suffix in (('ignored_at', '.before-ignored-at.db'),
+                                       ('ignored_word', '.before-ignored-word.db')):
+                    if column in columns:
+                        continue
+                    backup = Path(str(path) + suffix)
                     if not backup.exists():
                         temporary = Path(str(backup) + '.tmp')
                         try:
@@ -170,9 +174,12 @@ class Store:
                         finally:
                             temporary.unlink(missing_ok=True)
                 db.execute('BEGIN')
-                for name in ('source_json', 'grouped_id', 'deleted_at', 'ignored_at'):
+                migrate_ignored_word = 'ignored_word' not in columns
+                for name in ('source_json', 'grouped_id', 'deleted_at', 'ignored_at', 'ignored_word'):
                     if name not in columns:
                         db.execute(f'ALTER TABLE offers ADD COLUMN {name} TEXT')
+                if migrate_ignored_word:
+                    self._backfill_ignored_words(db)
             job_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_jobs)')}
             if 'clear_requested' not in job_columns:
                 backup = Path(str(path) + '.before-ai-job-cleanup.db')
@@ -264,6 +271,35 @@ class Store:
         except Exception:
             db.rollback()
             raise
+
+    @staticmethod
+    def _ignored_word_patterns(db):
+        return [(row['word'], re.compile(r'(?<![^\W_])' + re.escape(row['normalized']) + r'(?![^\W_])'))
+                for row in db.execute('''SELECT word,normalized FROM ignored_keywords
+                    WHERE length(normalized)>=4 AND normalized GLOB '*[^0-9]*' ORDER BY id''')]
+
+    @classmethod
+    def _matching_ignored_word(cls, parts, patterns):
+        bodies = [normalize(part['body'] or '') for part in parts]
+        return next((word for word, pattern in patterns
+                     if any(pattern.search(body) for body in bodies)), None)
+
+    @classmethod
+    def _backfill_ignored_words(cls, db):
+        patterns = cls._ignored_word_patterns(db)
+        if not patterns:
+            return
+        groups = {}
+        for row in db.execute('SELECT id,chat_id,grouped_id,body FROM offers ORDER BY id'):
+            key = (row['chat_id'], 'album', row['grouped_id']) if row['grouped_id'] is not None else (
+                row['chat_id'], 'offer', row['id'])
+            groups.setdefault(key, []).append(dict(row))
+        updates = []
+        for parts in groups.values():
+            word = cls._matching_ignored_word(parts, patterns)
+            if word:
+                updates.extend((word, part['id']) for part in parts)
+        db.executemany('UPDATE offers SET ignored_word=? WHERE id=?', updates)
 
     @contextmanager
     def connect(self):
@@ -734,36 +770,50 @@ class Store:
             matches = [row for row in offers
                        if ignored_matches(row['body'], normalized)
                        and (row['chat_id'], row['grouped_id'] if row['grouped_id'] is not None else ('offer', row['id'])) not in old_hidden]
-            messages = [row['id'] for row in matches if row['grouped_id'] is None]
+            messages = {row['id'] for row in matches if row['grouped_id'] is None}
             albums = {(row['chat_id'], row['grouped_id']) for row in matches if row['grouped_id'] is not None}
-            db.executemany('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?',
-                           [(now, offer_id) for offer_id in messages])
-            db.executemany('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
-                           [(now, chat_id, grouped_id) for chat_id, grouped_id in albums])
+            db.executemany('UPDATE offers SET ignored_at=coalesce(ignored_at,?),ignored_word=? WHERE id=?',
+                           [(now, word, offer_id) for offer_id in messages])
+            db.executemany('''UPDATE offers SET ignored_at=coalesce(ignored_at,?),ignored_word=?
+                              WHERE chat_id=? AND grouped_id=?''',
+                           [(now, word, chat_id, grouped_id) for chat_id, grouped_id in albums])
             return inserted
 
     def _refresh_ignored_at(self, db, chat_id, grouped_id, offer_id, was_ignored):
-        rows = db.execute('SELECT id,body FROM offers WHERE chat_id=? AND grouped_id=?' if grouped_id is not None
-                          else 'SELECT id,body FROM offers WHERE id=?',
+        rows = db.execute('SELECT id,body,ignored_word FROM offers WHERE chat_id=? AND grouped_id=?' if grouped_id is not None
+                          else 'SELECT id,body,ignored_word FROM offers WHERE id=?',
                           (chat_id, grouped_id) if grouped_id is not None else (offer_id,)).fetchall()
-        words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
-        if any(ignored_matches(row['body'], word) for row in rows for word in words):
+        patterns = self._ignored_word_patterns(db)
+        word = self._matching_ignored_word(rows, patterns)
+        if word:
+            existing_word = next((row['ignored_word'] for row in rows
+                                  if row['ignored_word'] and any(name == row['ignored_word'] and
+                                      pattern.search(normalize(row['body'] or '')) for name, pattern in patterns)), None)
+            word = existing_word or word
             now = datetime.now(timezone.utc).isoformat()
             if grouped_id is not None and not was_ignored:
-                db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
-                           (now, chat_id, grouped_id))
+                db.execute('''UPDATE offers SET ignored_at=coalesce(ignored_at,?),ignored_word=?
+                              WHERE chat_id=? AND grouped_id=?''', (now, word, chat_id, grouped_id))
             elif grouped_id is None and not was_ignored:
-                db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?', (now, offer_id))
+                db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?),ignored_word=? WHERE id=?',
+                           (now, word, offer_id))
+            elif grouped_id is not None:
+                db.execute('UPDATE offers SET ignored_word=? WHERE chat_id=? AND grouped_id=?',
+                           (word, chat_id, grouped_id))
+            else:
+                db.execute('UPDATE offers SET ignored_word=? WHERE id=?', (word, offer_id))
         elif grouped_id is not None:
-            db.execute('UPDATE offers SET ignored_at=NULL WHERE chat_id=? AND grouped_id=?', (chat_id, grouped_id))
+            db.execute('UPDATE offers SET ignored_at=NULL,ignored_word=NULL WHERE chat_id=? AND grouped_id=?',
+                       (chat_id, grouped_id))
         else:
-            db.execute('UPDATE offers SET ignored_at=NULL WHERE id=?', (offer_id,))
+            db.execute('UPDATE offers SET ignored_at=NULL,ignored_word=NULL WHERE id=?', (offer_id,))
 
     def remove_ignored(self, word_id):
         with self.connect() as db:
             db.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
             self._register_ignored_filter(db)
-            db.execute('''UPDATE offers SET ignored_at=NULL WHERE ignored_at IS NOT NULL AND NOT EXISTS (
+            db.execute('''UPDATE offers SET ignored_at=NULL,ignored_word=NULL
+                WHERE (ignored_at IS NOT NULL OR ignored_word IS NOT NULL) AND NOT EXISTS (
                 SELECT 1 FROM offers m WHERE m.chat_id=offers.chat_id
                   AND ((offers.grouped_id IS NULL AND m.id=offers.id)
                     OR (offers.grouped_id IS NOT NULL AND m.grouped_id=offers.grouped_id))
@@ -1004,10 +1054,25 @@ class Store:
         where = 'WHERE ' + ' AND '.join(clauses) if clauses else ''
         return where, args
 
-    def feed(self, q='', alerts=False, db=None, read=None, deleted=False):
+    def deleted_feed_page(self, page, page_size=25):
+        with self.connect() as db:
+            db.execute('BEGIN')
+            self._register_ignored_filter(db)
+            where = '''WHERE (o.deleted_at IS NOT NULL OR
+                (o.deleted_at IS NULL AND ignored_offer(o.body)))'''
+            total = db.execute('''SELECT count(*) FROM (
+                SELECT chat_id,grouped_id,CASE WHEN grouped_id IS NULL THEN id END AS single_id
+                FROM offers o ''' + where + '''
+                GROUP BY chat_id,grouped_id,CASE WHEN grouped_id IS NULL THEN id END)''').fetchone()[0]
+            pages = max(1, (total + page_size - 1) // page_size)
+            page = max(1, min(page, pages))
+            offers = self.feed(db=db, deleted=True, deleted_page=(page, page_size))
+            return offers, total, page, pages
+
+    def feed(self, q='', alerts=False, db=None, read=None, deleted=False, deleted_page=None):
         if db is None:
             with self.connect() as db:
-                return self.feed(q, alerts, db, read, deleted)
+                return self.feed(q, alerts, db, read, deleted, deleted_page)
         if not alerts:
             self._register_ignored_filter(db)
         if deleted:
@@ -1022,11 +1087,21 @@ class Store:
             where += ' AND ' + ('NOT ' if read else '') + unread_album
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
-        ignored_words = ([row['word'] for row in db.execute('SELECT word FROM ignored_keywords ORDER BY id')]
-                         if deleted else [])
-        selected = [dict(row) for row in db.execute(select + where +
-                         (' ORDER BY julianday(coalesce(deleted_at,ignored_at)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
-                         + ('' if deleted else ' LIMIT 100'), args)]
+        if deleted_page:
+            page, page_size = deleted_page
+            ranked = '''JOIN (SELECT o.id,row_number() OVER (
+                PARTITION BY o.chat_id,CASE WHEN o.grouped_id IS NULL THEN 0 ELSE 1 END,
+                             o.grouped_id,CASE WHEN o.grouped_id IS NULL THEN o.id END
+                ORDER BY julianday(coalesce(o.deleted_at,o.ignored_at)) DESC,o.id DESC
+                ) AS card_number FROM offers o ''' + where + ''') ranked ON ranked.id=o.id
+                WHERE ranked.card_number=1'''
+            selected = [dict(row) for row in db.execute(select + ranked + '''
+                ORDER BY julianday(coalesce(o.deleted_at,o.ignored_at)) DESC,o.id DESC LIMIT ? OFFSET ?''',
+                [*args, page_size, (page - 1) * page_size])]
+        else:
+            selected = [dict(row) for row in db.execute(select + where +
+                             (' ORDER BY julianday(coalesce(deleted_at,ignored_at)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
+                             + ('' if deleted else ' LIMIT 100'), args)]
         keys = {(r['chat_id'], r['grouped_id']) for r in selected if r['grouped_id']}
         albums = {}
         if keys:
@@ -1050,8 +1125,8 @@ class Store:
                                 for p in parts if p['deleted_at']]
                 card['deletion_reason'] = 'manual' if manual_times else 'ignored'
                 if not manual_times:
-                    card['ignored_words'] = [word for word in ignored_words
-                                             if any(ignored_matches(part['body'], word) for part in parts)]
+                    word = next((part['ignored_word'] for part in parts if part['ignored_word']), None)
+                    card['ignored_words'] = [word] if word else []
                 ignored_times = [datetime.fromisoformat(p['ignored_at'].replace('Z', '+00:00'))
                                  for p in parts if p['ignored_at']]
                 deletion_times = manual_times or ignored_times

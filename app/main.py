@@ -296,11 +296,12 @@ async def dashboard(request: Request, alerts: bool = False, q: str = '', notice:
 
 
 @app.get('/deleted', dependencies=[Depends(authenticate)])
-def deleted_offers_page(request: Request):
-    offers = store.feed(deleted=True)
+def deleted_offers_page(request: Request, page: int = 1):
+    offers, total, page, pages = store.deleted_feed_page(page)
     prepare_offers(offers)
     return templates.TemplateResponse(request, 'deleted.html', {
         'csrf': csrf_token, 'offers': offers, 'deleted_view': True,
+        'total': total, 'page': page, 'pages': pages,
     })
 
 

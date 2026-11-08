@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
 <h1 class="page-title">Excluídas recentemente</h1>
-<p class="muted">{{ offers|length }} ofertas ocultas por palavra ignorada ou excluídas manualmente, até a remoção física.</p>
+<p class="muted">{{ total }} ofertas ocultas por palavra ignorada ou excluídas manualmente, até a remoção física.</p>
 {% if offers %}<div class="offer-grid">{% for offer in offers %}{% include 'offer_card.html' %}{% endfor %}</div>
 {% else %}<section class="empty"><h2>Nenhuma oferta excluída recentemente.</h2><p>Ofertas ocultas por palavras ignoradas e exclusões manuais aparecerão aqui até serem removidas fisicamente.</p></section>{% endif %}
+{% if pages > 1 %}<nav class="terms-pagination" aria-label="Páginas de ofertas excluídas">{% if page > 1 %}<a href="/deleted?page={{ page - 1 }}">← Anterior</a>{% endif %}<span>Página {{ page }} de {{ pages }}</span>{% if page < pages %}<a href="/deleted?page={{ page + 1 }}">Próxima →</a>{% endif %}</nav>{% endif %}
 {% endblock %}

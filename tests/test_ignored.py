@@ -57,19 +57,48 @@ class IgnoredWordsTests(unittest.TestCase):
     def test_ignored_timestamp_backfills_new_match_and_preserves_overlapping_rules(self):
         self.add_offer(1, 'Oferta PS5 Slim e Xbox Series')
         self.assertTrue(self.store.add_ignored('PS5 Slim'))
-        first = self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at']
-        self.assertTrue(first)
+        first = self.store.rows('SELECT ignored_at,ignored_word FROM offers WHERE message_id=1')[0]
+        self.assertEqual(first['ignored_word'], 'PS5 Slim')
+        self.assertTrue(first['ignored_at'])
         self.store.add_ignored('Xbox Series')
-        self.assertEqual(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'], first)
+        current = self.store.rows('SELECT ignored_at,ignored_word FROM offers WHERE message_id=1')[0]
+        self.assertEqual(current['ignored_at'], first['ignored_at'])
+        self.assertEqual(current['ignored_word'], 'PS5 Slim')
         ps5_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='ps5 slim'")[0]['id']
         self.store.remove_ignored(ps5_id)
+        self.assertEqual(self.store.rows('SELECT ignored_word FROM offers WHERE message_id=1')[0]['ignored_word'], 'PS5 Slim')
         self.store.ingest(-100123, 1, 'Oferta Xbox Series', '2026-11-04', None)
-        self.assertEqual(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'], first)
+        current = self.store.rows('SELECT ignored_at,ignored_word FROM offers WHERE message_id=1')[0]
+        self.assertEqual(current['ignored_at'], first['ignored_at'])
+        self.assertEqual(current['ignored_word'], 'Xbox Series')
         xbox_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='xbox series'")[0]['id']
         self.store.remove_ignored(xbox_id)
-        self.assertIsNone(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+        current = self.store.rows('SELECT ignored_at,ignored_word FROM offers WHERE message_id=1')[0]
+        self.assertIsNone(current['ignored_at'])
+        self.assertIsNone(current['ignored_word'])
         self.store.ingest(-100123, 1, 'Oferta visível', '2026-11-04', None)
         self.assertIsNone(self.store.rows('SELECT ignored_at FROM offers WHERE message_id=1')[0]['ignored_at'])
+
+    def test_new_ignored_cause_backfills_offer_ending_in_punctuation(self):
+        self.add_offer(1, 'Oferta PS5 Slim!')
+        self.store.add_ignored('PS5 Slim')
+        row = self.store.rows('SELECT ignored_at,ignored_word FROM offers WHERE message_id=1')[0]
+        self.assertTrue(row['ignored_at'])
+        self.assertEqual(row['ignored_word'], 'PS5 Slim')
+
+    def test_new_album_cause_is_shared_by_all_parts(self):
+        self.store.add_ignored('PS5 Slim')
+        self.add_offer(1, 'Parte sem correspondência', grouped=55)
+        self.add_offer(2, 'Parte PS5 Slim', grouped=55)
+        rows = self.store.rows('SELECT ignored_word FROM offers WHERE grouped_id=?', ('55',))
+        self.assertEqual(rows, [{'ignored_word': 'PS5 Slim'}, {'ignored_word': 'PS5 Slim'}])
+
+    def test_new_offer_matching_multiple_words_uses_oldest_registered_cause(self):
+        self.store.add_ignored('PS5 Slim')
+        self.store.add_ignored('Café')
+        self.add_offer(1, 'Oferta Café e PS5 Slim')
+        self.assertEqual(self.store.rows('SELECT ignored_word FROM offers WHERE message_id=1'),
+                         [{'ignored_word': 'PS5 Slim'}])
 
     def test_ignored_timestamp_migration_leaves_previously_hidden_rows_null(self):
         self.add_offer(1, 'PS5 Slim antigo')
@@ -130,7 +159,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertGreater(offers[0]['deletion_at'], offers[-2]['deletion_at'])
         self.assertIsNone(offers[0].get('physical_delete_at'))
 
-    def test_deleted_cards_list_all_matching_ignored_words_across_album_parts(self):
+    def test_deleted_cards_show_initial_cause_matching_one_album_part(self):
         self.store.add_ignored('PS5 Slim')
         self.store.add_ignored('Café')
         self.add_offer(1, 'Oferta PS5 Slim!', grouped=55)
@@ -141,8 +170,25 @@ class IgnoredWordsTests(unittest.TestCase):
         cards = self.store.feed(deleted=True)
         ignored = next(card for card in cards if card['deletion_reason'] == 'ignored')
         manual = next(card for card in cards if card['deletion_reason'] == 'manual')
-        self.assertEqual(ignored['ignored_words'], ['PS5 Slim', 'Café'])
+        self.assertEqual(ignored['ignored_words'], ['PS5 Slim'])
         self.assertNotIn('ignored_words', manual)
+
+    def test_ignored_word_migration_infers_oldest_match_and_preserves_backup(self):
+        self.add_offer(1, 'Oferta sem termo', grouped=55)
+        self.add_offer(2, 'Parte PS5 Slim e Café', grouped=55)
+        self.store.add_ignored('PS5 Slim')
+        self.store.add_ignored('Café')
+        self.store.execute('ALTER TABLE offers DROP COLUMN ignored_word')
+
+        reopened = Store(self.store.path)
+
+        rows = reopened.rows('SELECT ignored_word FROM offers WHERE grouped_id=? ORDER BY message_id', ('55',))
+        self.assertEqual(rows, [{'ignored_word': 'PS5 Slim'}, {'ignored_word': 'PS5 Slim'}])
+        backup = sqlite3.connect(str(self.store.path) + '.before-ignored-word.db')
+        try:
+            self.assertNotIn('ignored_word', {row[1] for row in backup.execute('PRAGMA table_info(offers)')})
+        finally:
+            backup.close()
 
     def test_read_sections_keep_album_together_and_filter_before_limit(self):
         self.add_offer(1, 'Notebook parte 1', grouped=55)

@@ -623,6 +623,45 @@ class WebTests(unittest.TestCase):
         self.assertIn('Excluída manualmente', page.text)
         self.assertEqual(self.client.get('/deleted', follow_redirects=False).status_code, 303)
 
+    def test_deleted_page_paginates_cards_without_splitting_album(self):
+        main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+        for message_id in range(1, 25):
+            offer_id = main.store.ingest(1, message_id, f'Oferta manual {message_id}', '2026-11-08', None)
+            main.store.delete_offer(offer_id)
+            main.store.execute('UPDATE offers SET deleted_at=? WHERE id=?',
+                               ('2026-11-08T12:00:00+00:00', offer_id))
+        main.store.ingest(1, 25, 'Álbum parte um', '2026-11-08', None,
+                          source_json='{"grouped_id":77}')
+        main.store.ingest(1, 26, 'Álbum parte dois', '2026-11-08', None,
+                          source_json='{"grouped_id":77}')
+        main.store.delete_offer(main.store.rows('SELECT id FROM offers WHERE message_id=25')[0]['id'])
+        main.store.execute("UPDATE offers SET deleted_at='2026-11-08T11:00:00+00:00' WHERE grouped_id='77'")
+        main.store.execute("UPDATE offers SET deleted_at='2026-11-08T11:30:00+00:00' WHERE message_id=25")
+        middle_id = main.store.ingest(1, 27, 'Oferta manual do meio', '2026-11-08', None)
+        main.store.delete_offer(middle_id)
+        main.store.execute('UPDATE offers SET deleted_at=? WHERE id=?',
+                           ('2026-11-08T11:15:00+00:00', middle_id))
+        last_id = main.store.ingest(1, 28, 'Oferta manual da página dois', '2026-11-08', None)
+        main.store.delete_offer(last_id)
+        main.store.execute('UPDATE offers SET deleted_at=? WHERE id=?',
+                           ('2026-11-08T10:00:00+00:00', last_id))
+
+        first = self.client.get('/deleted', cookies=self.auth)
+        second = self.client.get('/deleted?page=2', cookies=self.auth)
+        beyond = self.client.get('/deleted?page=99', cookies=self.auth)
+
+        self.assertIn('27 ofertas ocultas', first.text)
+        self.assertIn('Página 1 de 2', first.text)
+        self.assertIn('Álbum parte um', first.text)
+        self.assertIn('Álbum parte dois', first.text)
+        self.assertIn('datetime="2026-11-08T11:30:00+00:00"', first.text)
+        self.assertNotIn('Oferta manual da página dois', first.text)
+        self.assertIn('Página 2 de 2', second.text)
+        self.assertIn('Oferta manual do meio', second.text)
+        self.assertIn('Oferta manual da página dois', second.text)
+        self.assertNotIn('Álbum parte um', second.text)
+        self.assertIn('Página 2 de 2', beyond.text)
+
     def test_alert_offer_deletion_is_soft_authenticated_and_album_wide(self):
         import json
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
