@@ -721,23 +721,25 @@ class Store:
         if len(normalized) < minimum or normalized.isdigit():
             raise ValueError(f'Use pelo menos {minimum} caracteres e não informe apenas números.')
         with self.connect() as db:
-            old_words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
-            rows = db.execute('SELECT id,chat_id,grouped_id,body,ignored_at FROM offers WHERE deleted_at IS NULL').fetchall()
-            old_hidden = {(r['chat_id'], r['grouped_id'] if r['grouped_id'] is not None else ('offer', r['id']))
-                          for r in rows if any(ignored_matches(r['body'], w) for w in old_words)}
             inserted = db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
                                   (word, normalized)).rowcount == 1
-            if inserted:
-                now = datetime.now(timezone.utc).isoformat()
-                words = old_words + [normalized]
-                for row in rows:
-                    key = (row['chat_id'], row['grouped_id'] if row['grouped_id'] is not None else ('offer', row['id']))
-                    if key not in old_hidden and any(ignored_matches(row['body'], w) for w in words):
-                        if row['grouped_id'] is None:
-                            db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?', (now, row['id']))
-                        else:
-                            db.execute('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
-                                       (now, row['chat_id'], row['grouped_id']))
+            if not inserted:
+                return False
+            old_pattern = ignored_pattern(row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords WHERE normalized<>?', (normalized,)))
+            now = datetime.now(timezone.utc).isoformat()
+            offers = db.execute('SELECT id,chat_id,grouped_id,body FROM offers WHERE deleted_at IS NULL').fetchall()
+            old_hidden = {(row['chat_id'], row['grouped_id'] if row['grouped_id'] is not None else ('offer', row['id']))
+                          for row in offers if old_pattern and old_pattern.search(normalize(row['body'] or ''))}
+            matches = [row for row in offers
+                       if ignored_matches(row['body'], normalized)
+                       and (row['chat_id'], row['grouped_id'] if row['grouped_id'] is not None else ('offer', row['id'])) not in old_hidden]
+            messages = [row['id'] for row in matches if row['grouped_id'] is None]
+            albums = {(row['chat_id'], row['grouped_id']) for row in matches if row['grouped_id'] is not None}
+            db.executemany('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE id=?',
+                           [(now, offer_id) for offer_id in messages])
+            db.executemany('UPDATE offers SET ignored_at=coalesce(ignored_at,?) WHERE chat_id=? AND grouped_id=?',
+                           [(now, chat_id, grouped_id) for chat_id, grouped_id in albums])
             return inserted
 
     def _refresh_ignored_at(self, db, chat_id, grouped_id, offer_id, was_ignored):
