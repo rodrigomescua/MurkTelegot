@@ -711,6 +711,22 @@ class WebTests(unittest.TestCase):
             future_signature = hmac.new(main.store.media_signing_key().encode(), future_identity.encode(), hashlib.sha256).hexdigest()
             self.assertEqual(self.client.get(f"/public-media/{offer['id']}/{future}/{future_signature}").status_code, 404)
 
+    def test_offer_media_is_available_until_deleted_offer_is_purged(self):
+        from pathlib import Path
+        main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
+        offer_id = main.store.ingest(-100123, 10, 'Oferta com imagem', '2026-11-04T12:00:00+00:00', None,
+                                     source_json='{"media":{"photo":{"_":"Photo","id":55}}}')
+        image = Path(self.tmp.name) / 'offer.jpg'
+        image.write_bytes(b'fake jpeg')
+        with patch.object(main.telegram, 'download', new_callable=AsyncMock, return_value=image) as download:
+            self.assertEqual(self.client.get(f'/offers/{offer_id}/media', cookies=self.auth).status_code, 200)
+            self.assertEqual(download.await_count, 1)
+
+            main.store.delete_offer(offer_id)
+            self.assertEqual(self.client.get(f'/offers/{offer_id}/media', cookies=self.auth).status_code, 200)
+            main.store.execute('DELETE FROM offers WHERE id=?', (offer_id,))
+            self.assertEqual(self.client.get(f'/offers/{offer_id}/media', cookies=self.auth).status_code, 404)
+
     def test_signed_offer_image_does_not_expose_spoilers(self):
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
         main.store.ingest(-100123, 10, 'Oferta com spoiler', '2026-11-04T12:00:00+00:00', None,

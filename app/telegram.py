@@ -181,14 +181,44 @@ class Telegram:
             result = self.save_message(offer['chat_id'], item, report_alert=True)
             await self.notify_alert(result[1] if result else None)
 
+    def media_cache_path(self, offer, info, thumbnail=False):
+        key = hashlib.sha256(f"{offer['chat_id']}:{offer['message_id']}:{info['identity']}:{thumbnail}".encode()).hexdigest()
+        return self.media_dir / key
+
+    def cleanup_media_cache(self):
+        if not self.store or not self.media_dir.is_dir():
+            return 0
+        retained = set()
+        for offer in self.store.rows('SELECT chat_id,message_id,source_json FROM offers'):
+            info = media_info(source_data(offer))
+            if info and info['kind'] != 'unsupported':
+                retained.add(self.media_cache_path(offer, info).name)
+                if info['thumbnail']:
+                    retained.add(self.media_cache_path(offer, info, thumbnail=True).name)
+        removed = 0
+        try:
+            cached_files = self.media_dir.iterdir()
+            for path in cached_files:
+                if (len(path.name) == 64 and all(char in '0123456789abcdef' for char in path.name)
+                        and path.name not in retained and path.is_file()):
+                    try:
+                        path.unlink()
+                        removed += 1
+                    except FileNotFoundError:
+                        pass
+                    except OSError:
+                        log.warning('Could not remove orphaned media cache file')
+        except OSError:
+            log.warning('Could not scan media cache directory')
+        return removed
+
     async def download(self, offer, thumbnail=False):
         source = source_data(offer)
         info = media_info(source)
         if not info or info['kind'] == 'unsupported' or (thumbnail and not info['thumbnail']):
             raise ValueError('Esta mídia não pode ser exibida aqui. Abra a mensagem no Telegram.')
-        key = hashlib.sha256(f"{offer['chat_id']}:{offer['message_id']}:{info['identity']}:{thumbnail}".encode()).hexdigest()
         self.media_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        path = self.media_dir / key
+        path = self.media_cache_path(offer, info, thumbnail)
         if path.is_file():
             return path
         async with self.media_slots:

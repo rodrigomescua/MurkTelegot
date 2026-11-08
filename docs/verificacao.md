@@ -28,6 +28,10 @@ Não há benchmark de desempenho nem teste de carga. O build e a execução de c
 
 142 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile app/main.py app/store.py` e `git diff --check` passaram. Validação visual não executada por solicitação do usuário. Workflow de release [42418320284](https://github.com/rodrigomescua/MurkTelegot/actions/runs/42418320284) concluiu os jobs `test` e `publish` com sucesso para `v0.5.6`, confirmando a publicação no GHCR pelo workflow; digest OCI consultável não foi obtido neste ambiente. Catálogo Runtipi atualizado para `0.5.6` (`tipi_version` 36) e o workflow do catálogo passou com 462 testes. A atualização foi enviada diretamente após rebase, contornando a proteção por PR/status; corrigir o procedimento nas próximas publicações e usar PR com checks obrigatórios. O servidor local foi parado. Nenhuma atualização foi aplicada à instância Runtipi.
 
+## Limpeza do cache de mídia órfão — 2026-11-07
+
+144 testes `unittest` passaram. O teste de cache confirma que arquivos vinculados a ofertas ativas e logicamente excluídas são preservados, arquivos sem oferta são removidos e arquivos temporários ativos não são tocados; após a purga física, o cache da oferta é removido. `py_compile app/main.py app/telegram.py`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. A rotina existente faz essa varredura a cada cinco minutos, inclusive na inicialização; não foi feita validação visual.
+
 ## Integração da identidade visual — 2026-11-04
 
 Logo no cabeçalho, favicon SVG e paleta azul verificados no Chromium, com a aplicação executada diretamente em Python e Telegram simulado. Layout desktop e largura de 320 px conferidos, sem transbordamento horizontal ou erros JavaScript. Repetidos os fluxos de login/2FA e seleção de 35 grupos. Contrastes calculados: texto do botão 7,06:1, links sobre cards 6,33:1, texto secundário 8,19:1 e bordas dos inputs 3,77:1. Esses checks não substituem uma auditoria completa de acessibilidade.

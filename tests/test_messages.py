@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 import os
 from pathlib import Path
@@ -200,6 +200,31 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.telegram.download(self.offer), path)
         self.telegram.client.download_media.assert_awaited_once()
         self.assertEqual(list(self.telegram.media_dir.glob('.download-*')), [])
+
+    async def test_media_cache_cleanup_keeps_logically_deleted_and_removes_purged_files(self):
+        async def download(msg, *, file, **kwargs):
+            file.write(b'fake-photo')
+            return file
+        self.telegram.client.download_media.side_effect = download
+        cached = await self.telegram.download(self.offer)
+        orphan = self.telegram.media_dir / ('0' * 64)
+        orphan.write_bytes(b'orphan')
+        temporary = self.telegram.media_dir / '.download-active'
+        temporary.write_bytes(b'in progress')
+
+        self.assertEqual(self.telegram.cleanup_media_cache(), 1)
+        self.assertTrue(cached.exists())
+        self.assertTrue(temporary.exists())
+        self.store.delete_offer(self.offer['id'])
+        self.assertEqual(self.telegram.cleanup_media_cache(), 0)
+        self.assertTrue(cached.exists())
+
+        expired = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=?', (expired, self.offer['id']))
+        self.store.expire_offers(datetime.now(timezone.utc))
+        self.assertEqual(self.telegram.cleanup_media_cache(), 1)
+        self.assertFalse(cached.exists())
+        self.assertTrue(temporary.exists())
 
     async def test_failed_download_removes_partial_file_and_retry_succeeds(self):
         async def broken(msg, *, file, **kwargs):

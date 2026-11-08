@@ -16,4 +16,4 @@ Permitir exclusão manual de uma oferta alertada com confirmação e CSRF; em á
 
 ## Consequências
 
-Ofertas com data antiga podem ser removidas na primeira limpeza; não há recuperação local após exclusão, então backups continuam importantes. Alertas podem crescer até exclusão manual. O cache de mídia não é removido por esta política. Não há migração de esquema.
+Ofertas com data antiga podem ser removidas na primeira limpeza; não há recuperação local após exclusão, então backups continuam importantes. Alertas podem crescer até exclusão manual. A cada cinco minutos, arquivos de mídia sem oferta correspondente são removidos do cache; o cache de ofertas logicamente excluídas é mantido até sua purga física. Não há migração de esquema.

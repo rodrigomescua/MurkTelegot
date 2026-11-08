@@ -81,6 +81,7 @@ async def lifespan(app):
     async def expire_loop():
         while True:
             await asyncio.to_thread(store.expire_offers)
+            await asyncio.to_thread(telegram.cleanup_media_cache)
             await asyncio.sleep(300)
     expiry = asyncio.create_task(expire_loop())
     await asyncio.to_thread(store.recover_ai_jobs)
@@ -739,7 +740,7 @@ async def undo_delete_offer(offer_id: int):
 
 @app.get('/offers/{offer_id}/media', dependencies=[Depends(authenticate)])
 async def offer_media(offer_id: int, thumbnail: bool = False):
-    rows = store.rows('SELECT * FROM offers WHERE id=? AND deleted_at IS NULL', (offer_id,))
+    rows = store.rows('SELECT * FROM offers WHERE id=?', (offer_id,))
     if not rows:
         raise HTTPException(404, 'Oferta não encontrada.')
     offer = rows[0]
