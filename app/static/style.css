@@ -49,7 +49,7 @@
 @media (min-width:851px){.main-nav[hidden]{display:flex}}
 @media (max-width:850px){
   :root{--nav-header-height:96px}
-  header{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);position:sticky;top:0;z-index:21;min-height:var(--nav-header-height);gap:8px}
+  header{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);position:sticky;top:0;z-index:21;min-height:var(--nav-header-height);gap:8px;background:var(--bg)}
   header .brand-area{display:contents}
   header .brand{justify-self:start;min-width:0}
   header .unread-count{justify-self:center;margin:0;padding:6px 8px}
