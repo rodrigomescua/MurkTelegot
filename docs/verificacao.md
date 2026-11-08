@@ -32,6 +32,8 @@ Não há benchmark de desempenho nem teste de carga. O build e a execução de c
 
 144 testes `unittest` passaram. O teste de cache confirma que arquivos vinculados a ofertas ativas e logicamente excluídas são preservados, arquivos sem oferta são removidos e arquivos temporários ativos não são tocados; após a purga física, o cache da oferta é removido. `py_compile app/main.py app/telegram.py`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. A rotina existente faz essa varredura a cada cinco minutos, inclusive na inicialização; não foi feita validação visual.
 
+Publicação `v0.5.7`: commit `ed716301d1d7d21dc9929ff1a5d7974f457c7c72`; workflow `42429659630` aprovou `test` e `publish`. Manifesto GHCR da tag `0.5.7` confirmou `linux/amd64`, digest `sha256:9400d7990296693aa1f2b662b6846028fcf39fbd9e845c207b38ac559297cc9c`. Catálogo Runtipi atualizado via PR [1459](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1459), merge `bdc897a9f234a5dc455283da8bf534e9a0a243a8`; checks `test`/`renovate` e workflow pós-merge `42429834064` passaram (462 testes). Catálogo e Compose estão em `0.5.7`, `tipi_version` 37. Instância Runtipi não atualizada.
+
 ## Integração da identidade visual — 2026-11-04
 
 Logo no cabeçalho, favicon SVG e paleta azul verificados no Chromium, com a aplicação executada diretamente em Python e Telegram simulado. Layout desktop e largura de 320 px conferidos, sem transbordamento horizontal ou erros JavaScript. Repetidos os fluxos de login/2FA e seleção de 35 grupos. Contrastes calculados: texto do botão 7,06:1, links sobre cards 6,33:1, texto secundário 8,19:1 e bordas dos inputs 3,77:1. Esses checks não substituem uma auditoria completa de acessibilidade.
