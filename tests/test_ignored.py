@@ -130,6 +130,20 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertGreater(offers[0]['deletion_at'], offers[-2]['deletion_at'])
         self.assertIsNone(offers[0].get('physical_delete_at'))
 
+    def test_deleted_cards_list_all_matching_ignored_words_across_album_parts(self):
+        self.store.add_ignored('PS5 Slim')
+        self.store.add_ignored('Café')
+        self.add_offer(1, 'Oferta PS5 Slim!', grouped=55)
+        self.add_offer(2, 'CAFÉ em promoção', grouped=55)
+        manual_id = self.store.ingest(-100123, 3, 'Exclusão manual', '2026-11-04', None)
+        self.store.delete_offer(manual_id)
+
+        cards = self.store.feed(deleted=True)
+        ignored = next(card for card in cards if card['deletion_reason'] == 'ignored')
+        manual = next(card for card in cards if card['deletion_reason'] == 'manual')
+        self.assertEqual(ignored['ignored_words'], ['PS5 Slim', 'Café'])
+        self.assertNotIn('ignored_words', manual)
+
     def test_read_sections_keep_album_together_and_filter_before_limit(self):
         self.add_offer(1, 'Notebook parte 1', grouped=55)
         self.add_offer(2, 'Notebook parte 2', grouped=55)
@@ -219,6 +233,17 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.store.ingest(-100123, 2, 'Notebook', '2026-11-04', None)
         self.assertEqual(self.client.get('/offers/new?after=1', cookies=self.auth).json(), {'count': 1})
         self.assertEqual(self.client.get('/offers/new?after=-1', cookies=self.auth).status_code, 400)
+
+    def test_deleted_page_displays_ignored_word_but_not_for_manual_deletion(self):
+        self.store.add_ignored('PS5 Slim')
+        manual_id = self.store.ingest(-100123, 2, 'Excluída manualmente', '2026-11-04', None)
+        self.store.delete_offer(manual_id)
+
+        page = self.client.get('/deleted', cookies=self.auth)
+
+        self.assertIn('Excluída por palavra ignorada · PS5 Slim', page.text)
+        self.assertIn('Excluída manualmente ·', page.text)
+        self.assertNotIn('Excluída manualmente · PS5 Slim', page.text)
 
     def test_collapsed_menu_auth_csrf_add_delete_and_alert_view(self):
         page = self.client.get('/', cookies=self.auth)

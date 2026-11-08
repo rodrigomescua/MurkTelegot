@@ -1020,6 +1020,8 @@ class Store:
             where += ' AND ' + ('NOT ' if read else '') + unread_album
         select = '''SELECT o.*, (SELECT group_concat(r.name, ', ') FROM hits h
                     JOIN rules r ON r.id=h.rule_id WHERE h.offer_id=o.id) AS rules FROM offers o '''
+        ignored_words = ([row['word'] for row in db.execute('SELECT word FROM ignored_keywords ORDER BY id')]
+                         if deleted else [])
         selected = [dict(row) for row in db.execute(select + where +
                          (' ORDER BY julianday(coalesce(deleted_at,ignored_at)) DESC,id DESC' if deleted else ' ORDER BY date DESC,id DESC')
                          + ('' if deleted else ' LIMIT 100'), args)]
@@ -1045,6 +1047,9 @@ class Store:
                 manual_times = [datetime.fromisoformat(p['deleted_at'].replace('Z', '+00:00'))
                                 for p in parts if p['deleted_at']]
                 card['deletion_reason'] = 'manual' if manual_times else 'ignored'
+                if not manual_times:
+                    card['ignored_words'] = [word for word in ignored_words
+                                             if any(ignored_matches(part['body'], word) for part in parts)]
                 ignored_times = [datetime.fromisoformat(p['ignored_at'].replace('Z', '+00:00'))
                                  for p in parts if p['ignored_at']]
                 deletion_times = manual_times or ignored_times
