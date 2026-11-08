@@ -198,3 +198,8 @@ Release `v0.5.5`: commit `0cb157f`; workflows de push `42356626743` e release `4
 ## Release 0.5.6 — validação local — 2026-11-07
 
 142 testes `unittest`, `node --check app/static/app.js`, `bash -n run-dev.sh`, `py_compile app/main.py app/store.py` e `git diff --check` passaram após corrigir a ordem da migração: o backup é feito antes de instalar os gatilhos de data, mantendo compatibilidade de rollback com a versão anterior. O servidor local foi parado a pedido. Validação visual não executada a pedido do usuário. Publicação e workflow GHCR serão registrados após a conclusão.
+
+
+## Release 0.5.10 e atualização da loja Runtipi — 2026-11-08
+
+O app local não estava em execução. A suíte passou com 149 testes; `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. Commit `9a19197` enviado para `main`; workflow de push `42444949806` passou. Release `v0.5.10`, workflow `42444983743`, concluiu `test` e `publish`. Manifesto GHCR verificado: `ghcr.io/rodrigomescua/murktelegot:0.5.10`, índice OCI `sha256:904dd7f77011cf281c1e9af369990ce95f95af39a8f0207ca805209fba2d59d8`, plataforma `linux/amd64`. O catálogo foi atualizado pela PR [1465](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1465), merge `4fa1e83`; checks `test`/`renovate` passaram (runs `42445177431`/`42445177401`) e CI pós-merge `42445256452` passou com 462 testes. `tipi_version` passou de 39 para 40. Appstore local sincronizado. A instância Runtipi não foi atualizada; preserve o volume ao atualizar manualmente.
