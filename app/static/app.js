@@ -204,6 +204,14 @@ function showOffer(detail) {
   offerModal.querySelector('.modal-close').focus();
 }
 offerModal.querySelector('.modal-close').addEventListener('click', () => offerModal.close());
+offerModal.addEventListener('click', (event) => {
+  if (event.target === offerModal) {
+    const rect = offerModal.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) offerModal.close();
+  } else if (event.target.closest('.message-photo img')) {
+    event.preventDefault();
+  }
+});
 offerModal.addEventListener('close', () => {
   const content = offerModal.querySelector('.offer-expanded');
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
@@ -261,7 +269,10 @@ document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
   if (!summary) return;
   const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && summary.contains(selection.anchorNode)) return;
+  if (selection && !selection.isCollapsed && summary.contains(selection.anchorNode)) {
+    event.preventDefault();
+    return;
+  }
   event.preventDefault();
   showOffer(summary.closest('.offer-detail'));
 });
