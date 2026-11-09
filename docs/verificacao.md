@@ -26,7 +26,7 @@ O usuário confirmou o login real no Telegram. Essa confirmação é distinta do
 
 ## Pré-publicação v0.5.13 — 2026-11-09
 
-O teste focado para descartar respostas do Telegram passou. `py_compile` para o código e o teste, `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. A suíte completa foi iniciada depois da instalação das dependências, mas não terminou localmente: ficou aguardando no teste `test_event_ingestion_ignores_private_and_handles_edits`; a validação completa fica pendente do CI da release.
+O teste focado para descartar respostas do Telegram passou. `py_compile` para o código e o teste, `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. A suíte completa foi iniciada depois da instalação das dependências, mas não terminou localmente: ficou aguardando no teste `test_event_ingestion_ignores_private_and_handles_edits`. O CI do push [42564480410](https://github.com/rodrigomescua/MurkTelegot/actions/runs/42564480410) passou com `test`; `publish` foi ignorado porque o evento era push. A criação da release retornou HTTP 403 pela CLI; a tag `v0.5.13` e a imagem GHCR não foram publicadas. A `main` do catálogo Runtipi está protegida pelo status obrigatório `test`; nenhuma alteração no catálogo foi iniciada.
 
 ## Limites
 
