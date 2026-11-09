@@ -110,7 +110,7 @@ Teste com banco temporário verifica criação aditiva do índice em banco exist
 
 ## Ações por seleção de texto
 
-Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_selection.py` (ou defina `PLAYWRIGHT_CHROMIUM_EXECUTABLE` para um executável Chromium disponível). O teste cria dados temporários, verifica o arraste real de mouse em viewport desktop sem abrir o card e usa viewport de 390 px com toque simulado para criação direta, filtro no modal, clique no backdrop, clique na imagem sem abrir outra página, rascunhos, erros, limites, campos sensíveis e spoilers. A seleção móvel é criada pela API do navegador; o gesto de pressionar e segurar e o menu nativo de dispositivos reais não foram testados.
+Com Playwright e Chromium instalados, execute `.venv/bin/python tests/browser_selection.py` (ou defina `PLAYWRIGHT_CHROMIUM_EXECUTABLE` para um executável Chromium disponível). O teste cria dados temporários, verifica que clicar no resumo não abre a oferta e que o botão “Abrir oferta” abre por toque e teclado; sem JavaScript, o `details` continua expansível. Também cobre arraste real de mouse em viewport desktop, seleção móvel simulada, filtro no modal, clique no backdrop, clique na imagem sem abrir outra página, rascunhos, erros, limites, campos sensíveis e spoilers. A seleção móvel é criada pela API do navegador; o gesto de pressionar e segurar e o menu nativo de dispositivos reais não foram testados.
 
 ## Retenção e gerenciamento de regras — 2026-11-05
 

@@ -193,11 +193,11 @@ offerModal.setAttribute('aria-labelledby', 'offer-modal-title');
 offerModal.innerHTML = '<div class="modal-heading"><h2 id="offer-modal-title"></h2><button type="button" class="secondary modal-close" aria-label="Fechar oferta">Fechar ✕</button></div><div class="modal-content"></div>';
 document.body.append(offerModal);
 let modalDetail;
-let modalSummary;
-function showOffer(detail) {
+let modalTrigger;
+function showOffer(detail, trigger) {
   if (offerModal.open) return;
   modalDetail = detail;
-  modalSummary = detail.querySelector('.offer-summary');
+  modalTrigger = trigger || detail.closest('.offer-card').querySelector('.offer-open') || detail.querySelector('.offer-summary');
   offerModal.querySelector('#offer-modal-title').textContent = detail.querySelector('.meta strong').textContent;
   offerModal.querySelector('.modal-content').append(detail.querySelector('.offer-expanded'));
   offerModal.showModal();
@@ -216,7 +216,7 @@ offerModal.addEventListener('close', () => {
   const content = offerModal.querySelector('.offer-expanded');
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
   modalDetail.append(content);
-  if (modalSummary.isConnected) modalSummary.focus();
+  if (modalTrigger.isConnected) modalTrigger.focus();
   const status = document.querySelector('#action-status');
   if (offerModal.contains(status)) document.querySelector('main').prepend(status);
 });
@@ -246,7 +246,7 @@ async function handleOfferCardSubmit(event) {
       actions.inert = false;
       overlay.hidden = true;
       overlay.querySelector('strong').textContent = '';
-      card.querySelector('.offer-summary')?.focus({preventScroll: true});
+      card.querySelector('.offer-open')?.focus({preventScroll: true});
     } else {
       const undoForm = overlay.querySelector('[data-card-undo]');
       undoForm.action = `${form.action}/undo`;
@@ -268,13 +268,17 @@ async function handleOfferCardSubmit(event) {
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
   if (!summary) return;
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && summary.contains(selection.anchorNode)) {
-    event.preventDefault();
-    return;
-  }
   event.preventDefault();
-  showOffer(summary.closest('.offer-detail'));
+});
+document.querySelectorAll('.offer-open').forEach((button) => {
+  button.hidden = false;
+  const summary = button.closest('.offer-card').querySelector('.offer-summary');
+  summary.tabIndex = -1;
+  summary.classList.add('offer-summary-static');
+});
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('.offer-open');
+  if (button) showOffer(button.closest('.offer-card').querySelector('.offer-detail'), button);
 });
 
 // Reopen the relevant offer or settings menu when following its anchor.

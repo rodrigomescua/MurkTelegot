@@ -70,3 +70,5 @@
 
 .management-page{display:grid;gap:20px}.management-panel{min-width:0;margin:0}.management-panel h2{margin:0 0 16px}.management-form form{max-width:680px}.management-form button{margin-top:12px}.management-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:4px}.management-search{flex:1;min-width:0;max-width:680px}.management-search label{margin-top:0}.management-count{flex:0 0 auto;margin:0 0 10px}.management-empty{margin:16px 0 0;padding:22px 16px;border:1px dashed var(--border);border-radius:8px;text-align:center}
 @media(max-width:600px){.management-toolbar{align-items:stretch;flex-direction:column;gap:8px}.management-count{margin:0}.management-empty{padding:18px 12px}}
+.offer-open{display:block;width:calc(100% - 24px);margin:0 12px 12px}
+.offer-summary-static{cursor:text}

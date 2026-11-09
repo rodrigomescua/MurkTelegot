@@ -28,4 +28,4 @@
 <div class="offer-expanded">
 <div class="message-content {{ 'album' if offer.parts|length > 1 else '' }}">{% for part in offer.parts %}{% include 'message.html' %}{% endfor %}</div>
 <div class="actions">{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer">Abrir no Telegram ↗</a>{% endif %}</div>
-</div></details></article>
+</div></details><button type="button" class="offer-open" hidden>Abrir oferta</button></article>
