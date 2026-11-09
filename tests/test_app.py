@@ -909,6 +909,27 @@ class WebTests(unittest.TestCase):
         self.assertIn('Nenhum alerta não lido', self.client.get('/alerts', cookies=self.auth).text)
 
 class TelegramTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reply_messages_are_not_ingested(self):
+        from types import SimpleNamespace
+        from datetime import datetime, timezone
+        from app.telegram import Telegram
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(-100123,?)', ('Ofertas',))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
+            telegram = Telegram(store, Path(directory), None, None)
+            message = SimpleNamespace(
+                id=9,
+                raw_text='Notebook em oferta',
+                date=datetime.now(timezone.utc),
+                to_json=lambda: json.dumps({'reply_to': {'reply_to_msg_id': 4}}),
+            )
+
+            await telegram.receive(SimpleNamespace(chat_id=-100123, message=message))
+
+            self.assertEqual(store.rows('SELECT * FROM offers'), [])
+            self.assertEqual(store.rows('SELECT * FROM hits'), [])
+
     async def test_event_ingestion_ignores_private_and_handles_edits(self):
         from types import SimpleNamespace
         from datetime import datetime, timezone

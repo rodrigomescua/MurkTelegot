@@ -24,6 +24,10 @@ O usuário confirmou o login real no Telegram. Essa confirmação é distinta do
 
 154 testes `unittest`, `py_compile app/main.py app/store.py`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Com uma cópia isolada do backup atualizado, a migração de causa levou 1,42 s para 894 ofertas e 676 palavras; a rota `/deleted` respondeu em 123 ms no Chromium, exibiu 25 cards por página e passou pela página seguinte. A primeira execução também aplicou a retenção existente ao banco temporário, que ficou com 765 cards. Chromium em desktop e 390 px não mostrou overflow horizontal nem erros JavaScript. A cópia temporária foi descartada; nenhum dado do banco original foi alterado.
 
+## Pré-publicação v0.5.13 — 2026-11-09
+
+O teste focado para descartar respostas do Telegram passou. `py_compile` para o código e o teste, `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. A suíte completa foi iniciada depois da instalação das dependências, mas não terminou localmente: ficou aguardando no teste `test_event_ingestion_ignores_private_and_handles_edits`; a validação completa fica pendente do CI da release.
+
 ## Limites
 
 Não há benchmark de desempenho nem teste de carga. O build e a execução de containers não foram feitos neste ambiente. A publicação GHCR é verificada no workflow da release; esse resultado não substitui testar a imagem no servidor de destino. Consulte os resultados de cada push no GitHub Actions para confirmar a suíte em Python 3.12.

@@ -94,6 +94,9 @@ class Telegram:
 
     def save_message(self, chat_id, message, *, report_alert=False):
         source = json.loads(message.to_json())
+        reply = source.get('reply_to') or {}
+        if reply.get('reply_to_msg_id'):
+            return None
         sender = getattr(message, 'sender', None)
         if sender:
             source['_sender_name'] = utils.get_display_name(sender)
