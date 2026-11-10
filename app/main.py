@@ -615,18 +615,18 @@ async def rules_page(request: Request, notice: str = ''):
 
 @app.post('/rules/{rule_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
 async def delete_rule(rule_id: int):
-    with store.connect() as db:
-        db.execute('DELETE FROM hits WHERE rule_id=?', (rule_id,))
-        db.execute('DELETE FROM rules WHERE id=?', (rule_id,))
+    store.remove_rule(rule_id)
     return RedirectResponse('/rules-page?notice=Regra+removida.', status_code=303)
 
 
 @app.get('/ignored', dependencies=[Depends(authenticate)])
-async def ignored_page(request: Request, notice: str = ''):
+async def ignored_page(request: Request, notice: str = '', q: str = '', page: int = 1):
+    if len(q) > 100 or page < 1:
+        raise HTTPException(400, 'Filtro inválido.')
+    ignored_words, total, page, pages = store.ignored_words_page(q, page)
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
-        'ignored_words': store.rows('''SELECT id,word,auto_delete,created_at FROM ignored_keywords
-            ORDER BY created_at DESC,id DESC'''),
+        'ignored_words': ignored_words, 'q': q, 'page': page, 'pages': pages, 'total': total,
     })
 
 
@@ -650,7 +650,8 @@ async def add_ignored(request: Request, word: str = Form(..., max_length=100),
 
 
 @app.post('/ignored/{word_id}/auto-delete', dependencies=[Depends(authenticate), Depends(csrf)])
-async def set_ignored_auto_delete(request: Request, word_id: int, enabled: bool = Form(...)):
+async def set_ignored_auto_delete(request: Request, word_id: int, enabled: bool = Form(...),
+                                  q: str = Form(''), page: int = Form(1)):
     deleted = store.set_ignored_auto_delete(word_id, enabled)
     if deleted is None:
         raise HTTPException(404, 'Palavra ignorada não encontrada.')
@@ -658,7 +659,8 @@ async def set_ignored_auto_delete(request: Request, word_id: int, enabled: bool 
                if enabled else 'Autoexclusão permanente desativada.')
     if 'application/json' in request.headers.get('accept', ''):
         return JSONResponse({'ok': True, 'message': message, 'deleted': deleted})
-    return ignored_redirect(message)
+    from urllib.parse import urlencode
+    return RedirectResponse('/ignored?' + urlencode({'q': q, 'page': page, 'notice': message}), status_code=303)
 
 
 @app.post('/ignored/{word_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
@@ -666,7 +668,10 @@ async def delete_ignored(request: Request, word_id: int):
     store.remove_ignored(word_id)
     if 'application/json' in request.headers.get('accept', ''):
         return {'ok': True, 'message': 'Palavra removida do filtro.'}
-    return ignored_redirect('Palavra removida do filtro.')
+    from urllib.parse import urlencode
+    form = await request.form()
+    return RedirectResponse('/ignored?' + urlencode({'q': form.get('q', ''), 'page': form.get('page', 1),
+                                                      'notice': 'Palavra removida do filtro.'}), status_code=303)
 
 
 @app.get('/terms', dependencies=[Depends(authenticate)])

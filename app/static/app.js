@@ -408,18 +408,7 @@ document.addEventListener('input', (event) => {
   if (event.target.id === 'rule-search') filterRules(event.target);
 });
 filterRules(document.querySelector('#rule-search'));
-function filterIgnored() {
-  const search = document.querySelector('#ignored-search');
-  if (!search) return;
-  const normalize = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR');
-  const rows = [...document.querySelectorAll('.ignored-list tbody tr')];
-  const term = normalize(search.value.trim());
-  rows.forEach((row) => { row.hidden = !normalize(row.dataset.term).includes(term); });
-  const visible = rows.filter((row) => !row.hidden).length;
-  document.querySelector('#ignored-count').textContent = `${rows.length} palavras cadastradas · ${visible} visíveis`;
-  document.querySelector('#ignored-no-results').hidden = !term || visible > 0;
-}
-filterIgnored();
+document.querySelectorAll('.ignored-auto-delete-form [data-ignored-save]').forEach((button) => { button.hidden = true; });
 document.addEventListener('click', (event) => {
   const button = event.target.closest('.sortable-table [data-sort]');
   if (!button) return;
@@ -441,7 +430,6 @@ document.addEventListener('click', (event) => {
   button.setAttribute('aria-sort', direction === 'asc' ? 'ascending' : 'descending');
   button.querySelector('[aria-hidden="true"]').textContent = direction === 'asc' ? '↑' : '↓';
 });
-ignoredSettings?.addEventListener('input', (event) => { if (event.target.id === 'ignored-search') filterIgnored(); });
 async function updateRulesList() {
   const list = document.querySelector('#rules-list');
   if (!list) return;
@@ -459,19 +447,19 @@ async function updateRulesList() {
 async function updateIgnoredList() {
   if (!ignoredSettings) return;
   const search = document.querySelector('#ignored-search').value;
-  const response = await fetch('/ignored', {credentials: 'same-origin'});
+  const page = document.querySelector('.ignored-auto-delete-form [name="page"]')?.value || 1;
+  const response = await fetch(`/ignored?q=${encodeURIComponent(search)}&page=${encodeURIComponent(page)}`, {credentials: 'same-origin'});
   if (!response.ok || response.redirected) throw new Error();
   const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
   const next = doc.querySelector('#ignored-management');
   if (!next) throw new Error();
   document.querySelector('#ignored-management').innerHTML = next.innerHTML;
   document.querySelector('#ignored-search').value = search;
-  filterIgnored();
+  document.querySelectorAll('.ignored-auto-delete-form [data-ignored-save]').forEach((button) => { button.hidden = true; });
 }
 async function submitQuick(form, button) {
-  const enabled = (form.matches('.ignored-auto-delete-form') && form.querySelector('[type="checkbox"][name="enabled"]')?.checked)
-    || (form.action.endsWith('/ignored') && form.querySelector('[name="auto_delete"]')?.checked);
-  if (enabled && !confirm('Ativar esta regra excluirá fisicamente as ofertas e os álbuns correspondentes que já existem. Deseja continuar?')) return;
+  const focusId = form.matches('.ignored-auto-delete-form')
+    ? form.querySelector('input[type="checkbox"][name="enabled"]')?.id : null;
   button.disabled = true;
   try {
     const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
@@ -489,6 +477,7 @@ async function submitQuick(form, button) {
     try {
       if (form.action.endsWith('/ignored') || form.action.includes('/ignored/')) {
         await updateIgnoredList();
+        if (focusId) document.getElementById(focusId)?.focus();
         await refreshTerms();
         document.querySelector('#refresh-feed')?.click();
       }
@@ -515,8 +504,14 @@ document.querySelectorAll('[data-quick-form]').forEach((form) => form.addEventLi
   submitQuick(form, event.submitter || form.querySelector('button'));
 }));
 ignoredSettings?.addEventListener('submit', (event) => {
+  if (event.target.method === 'get') return;
   event.preventDefault();
   submitQuick(event.target, event.submitter || event.target.querySelector('button'));
+});
+ignoredSettings?.addEventListener('change', (event) => {
+  if (!event.target.matches('.ignored-auto-delete-form input[name="enabled"][type="checkbox"]')) return;
+  const form = event.target.form;
+  submitQuick(form, form.querySelector('[data-ignored-save]'));
 });
 
 const termsContent = document.querySelector('#terms-content');
@@ -563,9 +558,6 @@ termsContent?.addEventListener('submit', async (event) => {
     toast('Selecione pelo menos um termo desta página.', true);
     return;
   }
-  const autoDelete = data.get('auto_delete') === 'true'
-    && (form.action.endsWith('/terms/ignore') || (form.matches('[data-term-batch]') && data.get('action') === 'ignore'));
-  if (autoDelete && !confirm('Esta opção excluirá permanentemente as ofertas e os álbuns correspondentes, inclusive os existentes, sem gerar alertas/Gotify ou usar IA. Deseja continuar?')) return;
   const controls = [...termsContent.querySelectorAll('button, input[type="checkbox"]')];
   controls.forEach((item) => { item.disabled = true; });
   let saved = false;
@@ -665,8 +657,6 @@ selectionBar.addEventListener('click', async (event) => {
   const action = button.dataset.selectionAction;
   const csrf = document.querySelector('form[action="/logout"] input[name="csrf"]')?.value;
   if (!csrf || !text || text.length > 100 || (action === 'rule' && text.includes(','))) return;
-  if (action === 'ignore' && selectionBar.querySelector('[data-selection-auto-delete]').checked
-      && !confirm('Esta palavra excluirá permanentemente as ofertas e os álbuns correspondentes que já existem. Deseja continuar?')) return;
   selectionBusy = true;
   selectionBar.querySelectorAll('button').forEach((item) => { item.disabled = true; });
   const data = new FormData();

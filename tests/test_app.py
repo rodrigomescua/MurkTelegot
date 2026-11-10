@@ -642,6 +642,33 @@ class WebTests(unittest.TestCase):
         self.assertIn('2026-02-01T00:00:00Z', rules)
         self.assertIn('data-sort="date" aria-sort="descending"', ignored)
 
+    def test_ignored_search_and_pagination_are_server_side_and_toggle_redirect_preserves_state(self):
+        for i in range(30):
+            word = f'produto-{i:02d}'
+            main.store.execute('INSERT INTO ignored_keywords(word,normalized,created_at) VALUES(?,?,?)',
+                               (word, word, f'2026-11-{(i % 9) + 1:02d}T00:00:{i:02d}Z'))
+        first = self.client.get('/ignored?q=PRODUTO&page=1', cookies=self.auth).text
+        second = self.client.get('/ignored?q=produto&page=2', cookies=self.auth).text
+        self.assertIn('30 palavras cadastradas', first)
+        self.assertIn('Página 1 de 2', first)
+        self.assertIn('Página 2 de 2', second)
+        self.assertNotIn('produto-00', first)
+        self.assertIn('produto-00', second)
+        self.assertIn('name="q" value="produto"', second)
+        row = main.store.rows("SELECT id FROM ignored_keywords WHERE normalized='produto-00'")[0]
+        response = self.client.post(f"/ignored/{row['id']}/auto-delete", cookies=self.auth,
+            data={'csrf': main.csrf_token, 'enabled': 'true', 'q': 'produto', 'page': '2'},
+            follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn('/ignored?q=produto&page=2', response.headers['location'])
+
+    def test_ignored_search_matches_accentless_and_keeps_search_literals(self):
+        main.store.add_ignored('Café especial')
+        page = self.client.get('/ignored?q=CAFE%20ESPECIAL', cookies=self.auth).text
+        self.assertIn('Café especial', page)
+        literal = self.client.get('/ignored?q=%25', cookies=self.auth).text
+        self.assertNotIn('Café especial', literal)
+
     def test_recently_deleted_page_shows_ignored_and_manual_offers(self):
         from datetime import datetime, timezone
         main.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
@@ -923,13 +950,14 @@ class WebTests(unittest.TestCase):
         self.assertIn('Lidos · 1', page.text)
         self.assertIn('Notebook PS5 Slim', page.text)
         self.assertIn('data-mark-seen', page.text)
-        self.assertNotIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
+        self.assertIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}).status_code, 403)
         response = self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}, data={'csrf': main.csrf_token})
         self.assertTrue(response.json()['ok'])
         updated = self.client.get('/alerts', cookies=self.auth).text
         self.assertIn('Não lidos · 0', updated)
         self.assertIn('Lidos · 2', updated)
+        self.assertNotIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(main.store.unread(), 0)
         third = main.store.ingest(1, 3, 'Notebook fallback', '2026-11-04', None)
         response = self.client.post(f'/offers/{third}/seen', cookies=self.auth, follow_redirects=False,

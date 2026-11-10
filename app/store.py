@@ -51,7 +51,8 @@ def offer_term_groups(rows, ignored):
     for row in rows:
         grouped.setdefault(key(row), []).append(row)
     for parts in grouped.values():
-        if not pattern or not any(pattern.search(normalize(part['body'])) for part in parts):
+        if (not pattern or any(part['has_alert'] for part in parts)
+                or not any(pattern.search(normalize(part['body'])) for part in parts)):
             yield parts
 
 
@@ -811,6 +812,8 @@ class Store:
                              (normalized,)).fetchall()
         offer_ids = set()
         for row in matches:
+            if cls._alert_protects_offer(db, row['id'], row['chat_id'], row['grouped_id']):
+                continue
             if row['grouped_id'] is None:
                 offer_ids.add(row['id'])
             else:
@@ -818,6 +821,18 @@ class Store:
                     'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?',
                     (row['chat_id'], row['grouped_id'])))
         return cls._permanently_delete_offers(db, offer_ids)
+
+    @staticmethod
+    def _alert_protects_offer(db, offer_id, chat_id, grouped_id):
+        if grouped_id is None:
+            return bool(db.execute('SELECT 1 FROM hits WHERE offer_id=? LIMIT 1', (offer_id,)).fetchone())
+        return bool(db.execute('''SELECT 1 FROM offers o JOIN hits h ON h.offer_id=o.id
+            WHERE o.chat_id=? AND o.grouped_id=? LIMIT 1''', (chat_id, grouped_id)).fetchone())
+
+    @staticmethod
+    def _rule_matches_parts(db, parts):
+        rules = db.execute('SELECT keywords FROM rules').fetchall()
+        return any(matches(body or '', rule['keywords']) for body in parts for rule in rules)
 
     def set_ignored_auto_delete(self, word_id, enabled):
         with self.connect() as db:
@@ -828,6 +843,17 @@ class Store:
             db.execute('UPDATE ignored_keywords SET auto_delete=? WHERE id=?', (int(enabled), word_id))
             return self._permanently_delete_ignored_matches(db, row['normalized']) if enabled else 0
 
+    def remove_rule(self, rule_id):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('SELECT 1 FROM rules WHERE id=?', (rule_id,)).fetchone():
+                return False
+            db.execute('DELETE FROM hits WHERE rule_id=?', (rule_id,))
+            db.execute('DELETE FROM rules WHERE id=?', (rule_id,))
+            for row in db.execute('SELECT normalized FROM ignored_keywords WHERE auto_delete=1').fetchall():
+                self._permanently_delete_ignored_matches(db, row['normalized'])
+            return True
+
     def auto_delete_album(self, chat_id, grouped_id, bodies):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -836,6 +862,8 @@ class Store:
             parts = [row[0] for row in db.execute(
                 'SELECT body FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped_id)))]
             parts.extend(bodies)
+            if self._alert_protects_offer(db, -1, chat_id, str(grouped_id)) or self._rule_matches_parts(db, parts):
+                return False
             if not any(ignored_matches(body, pattern) for pattern in patterns for body in parts):
                 return False
             ids = [row[0] for row in db.execute(
@@ -844,6 +872,13 @@ class Store:
             return True
 
     def _refresh_ignored_at(self, db, chat_id, grouped_id, offer_id, was_ignored):
+        if self._alert_protects_offer(db, offer_id, chat_id, grouped_id):
+            if grouped_id is not None:
+                db.execute('UPDATE offers SET ignored_at=NULL,ignored_word=NULL WHERE chat_id=? AND grouped_id=?',
+                           (chat_id, grouped_id))
+            else:
+                db.execute('UPDATE offers SET ignored_at=NULL,ignored_word=NULL WHERE id=?', (offer_id,))
+            return
         rows = db.execute('SELECT id,body,ignored_word FROM offers WHERE chat_id=? AND grouped_id=?' if grouped_id is not None
                           else 'SELECT id,body,ignored_word FROM offers WHERE id=?',
                           (chat_id, grouped_id) if grouped_id is not None else (offer_id,)).fetchall()
@@ -883,6 +918,20 @@ class Store:
                     OR (offers.grouped_id IS NOT NULL AND m.grouped_id=offers.grouped_id))
                   AND ignored_offer(m.body))''')
 
+    def ignored_words_page(self, q='', page=1, page_size=25):
+        q = normalize(q.strip())
+        pattern = '%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%'
+        where = "WHERE normalized LIKE ? ESCAPE '\\'" if q else ''
+        args = [pattern] if q else []
+        with self.connect() as db:
+            total = db.execute('SELECT count(*) FROM ignored_keywords ' + where, args).fetchone()[0]
+            pages = max(1, (total + page_size - 1) // page_size)
+            page = max(1, min(page, pages))
+            rows = [dict(row) for row in db.execute('''SELECT id,word,auto_delete,created_at FROM ignored_keywords '''
+                + where + ' ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?',
+                [*args, page_size, (page - 1) * page_size])]
+        return rows, total, page, pages
+
     def frequent_terms(self):
         # Count each phrase once per offer, including an album's separate messages.
         stopwords = {'a', 'as', 'ao', 'aos', 'o', 'os', 'um', 'uma', 'uns', 'umas',
@@ -895,7 +944,8 @@ class Store:
             hidden = [row[0] for row in db.execute('SELECT normalized FROM hidden_suggestions')]
             minimum = self.frequent_terms_min_chars()
             rows = db.execute('''SELECT o.id,o.chat_id,o.grouped_id,o.body,e.offer_id AS extraction_id,
-                    e.product_name FROM offers o LEFT JOIN offer_extractions e ON e.offer_id=o.id
+                    e.product_name,EXISTS(SELECT 1 FROM hits h WHERE h.offer_id=o.id) AS has_alert
+                    FROM offers o LEFT JOIN offer_extractions e ON e.offer_id=o.id
                     WHERE o.deleted_at IS NULL ORDER BY o.chat_id,o.grouped_id,o.id''').fetchall()
         hidden_terms = {normalize(word) for text in hidden for word, _, _ in term_phrases(text)}
         for parts in offer_term_groups(rows, ignored):
@@ -923,6 +973,7 @@ class Store:
             ignored = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             rows = [dict(row) for row in db.execute(
               '''SELECT o.*,e.offer_id AS extraction_id,e.product_name,
+                    EXISTS(SELECT 1 FROM hits h WHERE h.offer_id=o.id) AS has_alert,
                     (SELECT group_concat(r.name, ', ') FROM hits h JOIN rules r ON r.id=h.rule_id
                        WHERE h.offer_id=o.id) AS rules
                      FROM offers o LEFT JOIN offer_extractions e ON e.offer_id=o.id
@@ -1006,9 +1057,13 @@ class Store:
                                      else 'SELECT id,body FROM offers WHERE id=?',
                                      (chat_id, str(grouped)) if grouped is not None else
                                      (previous['id'],) if previous else (-1,)).fetchall()
+            alert_parts = [body or '', *(row['body'] or '' for row in prior_group)]
+            alert_protected = self._alert_protects_offer(db, previous['id'], chat_id, str(previous['grouped_id'])
+                                if previous and previous['grouped_id'] is not None else None) if previous else False
+            alert_protected = alert_protected or self._rule_matches_parts(db, alert_parts)
             auto_delete_words = [row[0] for row in db.execute(
                 'SELECT normalized FROM ignored_keywords WHERE auto_delete=1 ORDER BY id')]
-            if any(ignored_matches(part, word) for word in auto_delete_words
+            if not alert_protected and any(ignored_matches(part, word) for word in auto_delete_words
                    for part in [body or '', *(row['body'] or '' for row in prior_group)]):
                 if grouped is not None:
                     ids = [row[0] for row in db.execute(
@@ -1127,9 +1182,11 @@ class Store:
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
         else:
-            clauses.append('''NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
+            clauses.append('''(NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
                 SELECT 1 FROM offers m WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
-                  AND ignored_offer(m.body)))''')
+                  AND ignored_offer(m.body))) OR EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                    WHERE a.id=o.id OR (o.grouped_id IS NOT NULL AND a.chat_id=o.chat_id
+                      AND a.grouped_id=o.grouped_id)))''')
             alert_group = '''(a.id=o.id OR (o.grouped_id IS NOT NULL AND a.chat_id=o.chat_id
                 AND a.grouped_id=o.grouped_id))'''
             clauses.append(f'''(NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
@@ -1146,7 +1203,10 @@ class Store:
             db.execute('BEGIN')
             self._register_ignored_filter(db)
             where = '''WHERE (o.deleted_at IS NOT NULL OR
-                (o.deleted_at IS NULL AND ignored_offer(o.body)))'''
+                (o.deleted_at IS NULL AND ignored_offer(o.body) AND NOT EXISTS (
+                    SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                    WHERE a.chat_id=o.chat_id AND ((o.grouped_id IS NULL AND a.id=o.id)
+                      OR (o.grouped_id IS NOT NULL AND a.grouped_id=o.grouped_id)))))'''
             total = db.execute('''SELECT count(*) FROM (
                 SELECT chat_id,grouped_id,CASE WHEN grouped_id IS NULL THEN id END AS single_id
                 FROM offers o ''' + where + '''
@@ -1163,7 +1223,10 @@ class Store:
         if not alerts:
             self._register_ignored_filter(db)
         if deleted:
-            where, args = '''WHERE (o.deleted_at IS NOT NULL OR (o.deleted_at IS NULL AND ignored_offer(o.body)))''', []
+            where, args = '''WHERE (o.deleted_at IS NOT NULL OR (o.deleted_at IS NULL AND ignored_offer(o.body)
+                AND NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                    WHERE a.chat_id=o.chat_id AND ((o.grouped_id IS NULL AND a.id=o.id)
+                      OR (o.grouped_id IS NOT NULL AND a.grouped_id=o.grouped_id)))))''', []
         else:
             where, args = self.feed_filter(q, alerts)
         if alerts and read is not None:

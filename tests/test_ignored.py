@@ -46,7 +46,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertFalse(self.store.add_ignored('ps5 slim'))
         self.add_offer(2, 'Notebook com ps5 slim, promoção')
         self.add_offer(3, 'Notebook para PS5pro item')
-        self.assertEqual([o['message_id'] for o in self.store.feed()], [3])
+        self.assertEqual([o['message_id'] for o in self.store.feed()], [3, 2, 1])
         self.assertEqual({o['message_id'] for o in self.store.feed(alerts=True)}, {1, 2, 3})
         self.assertEqual(self.store.unread(), 3)
         self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 3)
@@ -122,7 +122,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.store.execute('INSERT INTO chats VALUES(-100456,?)', ('Outro',))
         self.store.ingest(-100456, 1, 'Notebook normal', '2026-11-04', None,
                           source_json=json.dumps({'grouped_id': 55}))
-        self.assertEqual([o['chat_id'] for o in self.store.feed()], [-100456])
+        self.assertEqual({o['chat_id'] for o in self.store.feed()}, {-100456, -100123})
         cards = self.store.feed(alerts=True)
         album = next(o for o in cards if o['chat_id'] == -100123)
         self.assertEqual([p['message_id'] for p in album['parts']], [1, 2])
@@ -137,6 +137,31 @@ class IgnoredWordsTests(unittest.TestCase):
             self.add_offer(i, 'PS5 Slim em promoção')
         self.assertEqual([o['message_id'] for o in self.store.feed()], [1])
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 111)
+
+    def test_alerts_override_ignored_filter_and_auto_delete_for_messages_and_albums(self):
+        self.store.add_ignored('PS5 Slim', auto_delete=True)
+        single = self.store.ingest(-100123, 1, 'Notebook com PS5 Slim', '2026-11-04', None)
+        self.store.ingest(-100123, 2, 'Notebook álbum', '2026-11-04', None,
+                          source_json='{"grouped_id":55}')
+        self.store.ingest(-100123, 3, 'PS5 Slim acompanha', '2026-11-04', None,
+                          source_json='{"grouped_id":55}')
+        self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 3)
+        self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 2)
+        self.assertIn(single, [card['id'] for card in self.store.feed()])
+        self.assertEqual(len(self.store.feed()), 2)
+        self.assertEqual(self.store.feed(deleted=True), [])
+        self.assertEqual(self.store.term_offers('notebook')[1], 2)
+
+    def test_removing_last_alert_rule_applies_existing_auto_delete_to_album_atomically(self):
+        self.store.add_ignored('PS5 Slim', auto_delete=True)
+        self.store.ingest(-100123, 1, 'Notebook com PS5 Slim', '2026-11-04', None)
+        self.store.ingest(-100123, 2, 'Notebook álbum', '2026-11-04', None,
+                          source_json='{"grouped_id":55}')
+        self.store.ingest(-100123, 3, 'PS5 Slim acompanha', '2026-11-04', None,
+                          source_json='{"grouped_id":55}')
+        self.assertTrue(self.store.remove_rule(1))
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
 
     def test_recently_deleted_includes_manual_and_ignored_until_physical_removal(self):
         from datetime import datetime, timezone, timedelta
@@ -227,8 +252,8 @@ class IgnoredWordsTests(unittest.TestCase):
         self.add_offer(4, 'Outra parte', grouped=12)
         self.add_offer(5, 'Notebook PS5 Slim')
         self.add_offer(6, 'Oferta diferente')
-        self.assertEqual(self.store.new_offers(marker), 2)
-        self.assertEqual(self.store.new_offers(marker, 'Notebook'), 1)
+        self.assertEqual(self.store.new_offers(marker), 3)
+        self.assertEqual(self.store.new_offers(marker, 'Notebook'), 2)
         self.assertEqual(self.store.new_offers(marker, alerts=True), 2)
         self.assertEqual(self.store.new_offers(marker, 'Notebook', True), 2)
 
@@ -268,22 +293,24 @@ class IgnoredWordsTests(unittest.TestCase):
                          [{'word': 'Palavra antiga', 'auto_delete': 0}])
         self.assertFalse(Path(str(self.store.path) + '.before-ignored-auto-delete.db').exists())
 
-    def test_auto_delete_on_add_and_existing_rule_physically_removes_matching_albums(self):
+    def test_auto_delete_physically_removes_matching_albums(self):
+        self.store.remove_rule(1)
         self.add_offer(1, 'Notebook e PS5 Slim', grouped=55)
         self.add_offer(2, 'Parte sem termo', grouped=55)
         self.add_offer(3, 'Notebook sem filtro')
-        self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 2)
+        self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 0)
 
         self.assertTrue(self.store.add_ignored('PS5 Slim'))
         word_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='ps5 slim'")[0]['id']
         self.assertEqual(self.store.set_ignored_auto_delete(word_id, True), 2)
 
         self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
-        self.assertEqual(self.store.rows('SELECT * FROM hits'), [{'offer_id': 3, 'rule_id': 1}])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
         self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords WHERE id=?', (word_id,)),
                          [{'auto_delete': 1}])
 
     def test_auto_delete_flag_on_creation_deletes_existing_matches_and_false_remains_default(self):
+        self.store.remove_rule(1)
         self.add_offer(1, 'Notebook com Xbox Series')
         self.assertTrue(self.store.add_ignored('Xbox Series', auto_delete=True))
 
@@ -318,6 +345,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
 
     def test_deleted_page_displays_ignored_word_but_not_for_manual_deletion(self):
         self.store.add_ignored('PS5 Slim')
+        self.store.ingest(-100123, 3, 'PS5 Slim sem alerta', '2026-11-04', None)
         manual_id = self.store.ingest(-100123, 2, 'Excluída manualmente', '2026-11-04', None)
         self.store.delete_offer(manual_id)
 
@@ -338,7 +366,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
         response = self.client.post('/ignored', cookies=self.auth, data=data, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
-        self.assertNotIn('class="offer-card"', self.client.get('/', cookies=self.auth).text)
+        self.assertIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
         alerts = self.client.get('/?alerts=true', cookies=self.auth)
         self.assertIn('Notebook e PS5 Slim!', alerts.text)
         self.assertIn('Novo alerta', alerts.text)
@@ -361,8 +389,8 @@ class IgnoredWordsWebTests(unittest.TestCase):
                                     data={'csrf': main.csrf_token, 'word': 'PS5 Slim', 'auto_delete': 'true'},
                                     follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
-        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 1}])
+        self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 1)
         self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 1}])
 
         self.store.ingest(-100123, 2, 'Xbox Series', '2026-11-04', None)
@@ -373,7 +401,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
                                     headers={'Content-Type': 'application/x-www-form-urlencoded',
                                              'Accept': 'application/json'})
         self.assertEqual(response.json()['deleted'], 1)
-        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 1}])
         response = self.client.post(f'/ignored/{word_id}/auto-delete', cookies=self.auth,
                                     data={'csrf': main.csrf_token, 'enabled': 'false'},
                                     headers={'Accept': 'application/json'})
@@ -381,7 +409,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords WHERE id=?', (word_id,)),
                          [{'auto_delete': 0}])
         self.store.ingest(-100123, 3, 'Xbox Series', '2026-11-04', None)
-        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 1}, {'message_id': 3}])
 
     def test_invalid_and_html_words_are_handled_safely(self):
         data = {'csrf': main.csrf_token, 'word': '   '}
