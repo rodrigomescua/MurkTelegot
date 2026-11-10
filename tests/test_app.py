@@ -490,6 +490,40 @@ class WebTests(unittest.TestCase):
             asyncio.run(main.process_ai_job(next_job))
         self.assertEqual(main.store.ai_jobs()[0][0]['status'], 'completed')
 
+    def test_permanent_ignore_interrupts_inflight_ai_and_cancels_remaining_items(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100125, 'Grupo'))
+        main.store.ingest(-100125, 1, 'Oferta comum', '2026-11-05T12:00:00+00:00', None)
+        main.store.ingest(-100125, 2, 'Notebook secreto', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        job_id, _ = main.store.enqueue_ai_job(True)
+        job = main.store.claim_ai_job()
+        main.store.add_ignored('secreto')
+        rule_id = main.store.rows("SELECT id FROM ignored_keywords WHERE normalized='secreto'")[0]['id']
+        started = asyncio.Event()
+        calls = []
+
+        async def hanging_extract(*_args):
+            calls.append('started')
+            started.set()
+            await asyncio.Event().wait()
+
+        async def run():
+            with patch.object(main, 'extract_ai', side_effect=hanging_extract):
+                worker = asyncio.create_task(main.process_ai_job(job))
+                await started.wait()
+                main.store.set_ignored_auto_delete(rule_id, True)
+                self.assertTrue(main.store.ai_job_cancel_requested(job_id))
+                await asyncio.wait_for(worker, timeout=1)
+
+        asyncio.run(run())
+        jobs, active = main.store.ai_jobs()
+        self.assertEqual(calls, ['started'])
+        self.assertIsNone(active)
+        self.assertEqual(jobs[0]['status'], 'cancelled')
+        self.assertEqual(jobs[0]['cancelled'], 2)
+        self.assertEqual(main.store.rows('SELECT message_id FROM offers'), [{'message_id': 1}])
+        self.assertEqual(main.store.rows('SELECT * FROM offer_extractions'), [])
+
     def test_worker_shutdown_keeps_inflight_item_recoverable(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100125, 'Grupo'))
         main.store.ingest(-100125, 1, 'Oferta', '2026-11-05T12:00:00+00:00', None)
@@ -604,7 +638,7 @@ class WebTests(unittest.TestCase):
         rules = self.client.get('/rules-page', cookies=self.auth).text
         ignored = self.client.get('/ignored', cookies=self.auth).text
         self.assertLess(rules.index('>nova</td>'), rules.index('>antiga</td>'))
-        self.assertLess(ignored.index('>Nova</td>'), ignored.index('>Antiga</td>'))
+        self.assertLess(ignored.index('<span>Nova</span>'), ignored.index('<span>Antiga</span>'))
         self.assertIn('2026-02-01T00:00:00Z', rules)
         self.assertIn('data-sort="date" aria-sort="descending"', ignored)
 

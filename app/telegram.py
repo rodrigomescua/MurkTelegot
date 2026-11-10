@@ -122,13 +122,26 @@ class Telegram:
         try:
             if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
                 return
+            messages = list(event.messages)
+            if self.store.auto_delete_album(event.chat_id, event.grouped_id,
+                                            [message.raw_text or '' for message in messages]):
+                return
             offer_ids = []
-            for message in event.messages:
+            alerts = []
+            auto_deleted = False
+            for message in messages:
                 result = self.save_message(event.chat_id, message, report_alert=True)
+                if result is None and self.store.auto_delete_album(
+                        event.chat_id, event.grouped_id, [part.raw_text or '' for part in messages]):
+                    auto_deleted = True
+                    break
                 if result:
                     offer_ids.append(result[0])
-                    await self.notify_alert(result[1])
-            if offer_ids:
+                    if result[1]:
+                        alerts.append(result[1])
+            if offer_ids and not auto_deleted:
+                for alert in alerts:
+                    await self.notify_alert(alert)
                 root = self.store.rows('''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
                     ORDER BY message_id LIMIT 1''', (event.chat_id, str(event.grouped_id)))
                 if root:

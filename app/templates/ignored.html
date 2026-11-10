@@ -9,6 +9,8 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label for="ignored-word">Palavra ou expressão inteira</label>
       <input id="ignored-word" name="word" placeholder="Ex.: PS5" required maxlength="100">
+      <label class="check"><input type="checkbox" name="auto_delete" value="true"> Excluir permanentemente ofertas e álbuns correspondentes, inclusive os existentes</label>
+      <p class="field-help">Correspondências apagadas não geram alertas/Gotify nem passam pela extração de IA.</p>
       <button>Adicionar palavra</button>
     </form>
   </section>
@@ -31,7 +33,16 @@
         </tr></thead>
         <tbody>{% for word in ignored_words %}
           <tr data-term="{{ word.word }}">
-            <td>{{ word.word }}</td>
+            <td>
+              <span>{{ word.word }}</span>
+              <span class="ignored-auto-delete-state">Autoexclusão {{ 'ativada' if word.auto_delete else 'desativada' }}</span>
+              <form method="post" action="/ignored/{{ word.id }}/auto-delete" class="ignored-auto-delete-form">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="enabled" value="false">
+                <label class="check" for="ignored-auto-delete-{{ word.id }}"><input id="ignored-auto-delete-{{ word.id }}" type="checkbox" name="enabled" value="true" {{ 'checked' if word.auto_delete else '' }}> Autoexclusão permanente</label>
+                <button class="secondary">Salvar</button>
+              </form>
+            </td>
             <td data-value="{{ word.created_at }}"><time datetime="{{ word.created_at }}">{{ word.created_at[:16]|replace('T',' ') }} UTC</time></td>
             <td><form method="post" action="/ignored/{{ word.id }}/delete"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary" aria-label="Remover palavra ignorada {{ word.word }}">Remover</button></form></td>
           </tr>

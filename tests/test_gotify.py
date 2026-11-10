@@ -224,6 +224,31 @@ class GotifyTests(unittest.TestCase):
 
 
 class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
+    async def test_permanent_auto_delete_suppresses_storage_alerts_and_ai_for_messages_and_albums(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Notebook', 'notebook'))
+            store.add_ignored('PS5 Slim', auto_delete=True)
+            store.save_gotify('http://gotify', 'test-token', True)
+            store.save_ai_settings('secret-openai', '', [{'provider': 'openai', 'id': 'a'}])
+            telegram = Telegram(store, Path(directory), None, None)
+
+            def message(mid, body, grouped=None):
+                return SimpleNamespace(id=mid, raw_text=body, date=datetime.now(timezone.utc),
+                                       grouped_id=grouped,
+                                       to_json=lambda: json.dumps({'grouped_id': grouped}))
+
+            with patch('app.telegram.send_gotify') as send:
+                await telegram.receive(SimpleNamespace(chat_id=1, message=message(1, 'Notebook com PS5 Slim')))
+                await telegram.receive_album(SimpleNamespace(chat_id=1, grouped_id=77, messages=[
+                    message(2, 'Notebook bundle', 77), message(3, 'Inclui PS5 Slim', 77)]))
+
+            send.assert_not_called()
+            self.assertEqual(store.rows('SELECT * FROM offers'), [])
+            self.assertEqual(store.rows('SELECT * FROM hits'), [])
+            self.assertEqual(store.rows('SELECT * FROM ai_jobs'), [])
+
     async def test_telegram_automatically_queues_new_offer_and_album_once(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')

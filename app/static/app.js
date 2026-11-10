@@ -469,6 +469,9 @@ async function updateIgnoredList() {
   filterIgnored();
 }
 async function submitQuick(form, button) {
+  const enabled = (form.matches('.ignored-auto-delete-form') && form.querySelector('[type="checkbox"][name="enabled"]')?.checked)
+    || (form.action.endsWith('/ignored') && form.querySelector('[name="auto_delete"]')?.checked);
+  if (enabled && !confirm('Ativar esta regra excluirá fisicamente as ofertas e os álbuns correspondentes que já existem. Deseja continuar?')) return;
   button.disabled = true;
   try {
     const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
@@ -560,6 +563,9 @@ termsContent?.addEventListener('submit', async (event) => {
     toast('Selecione pelo menos um termo desta página.', true);
     return;
   }
+  const autoDelete = data.get('auto_delete') === 'true'
+    && (form.action.endsWith('/terms/ignore') || (form.matches('[data-term-batch]') && data.get('action') === 'ignore'));
+  if (autoDelete && !confirm('Esta opção excluirá permanentemente as ofertas e os álbuns correspondentes, inclusive os existentes, sem gerar alertas/Gotify ou usar IA. Deseja continuar?')) return;
   const controls = [...termsContent.querySelectorAll('button, input[type="checkbox"]')];
   controls.forEach((item) => { item.disabled = true; });
   let saved = false;
@@ -582,9 +588,10 @@ selectionBar.className = 'selection-actions';
 selectionBar.setAttribute('role', 'toolbar');
 selectionBar.setAttribute('aria-label', 'Ações para o texto selecionado');
 selectionBar.hidden = true;
-selectionBar.innerHTML = '<button type="button" data-selection-action="rule">Criar alerta</button><button type="button" data-selection-action="ignore">Ignorar ofertas</button><span class="selection-help" role="status" hidden></span>';
+selectionBar.innerHTML = '<button type="button" data-selection-action="rule">Criar alerta</button><button type="button" data-selection-action="ignore">Ignorar ofertas</button><label class="check"><input type="checkbox" data-selection-auto-delete> Excluir permanentemente correspondentes, inclusive ofertas existentes</label><span class="selection-help" role="status" hidden></span>';
 document.body.append(selectionBar);
 let selectedText = '';
+let lastRenderedSelection = '';
 let selectionTimer;
 let selectingAction = false;
 let selectionBusy = false;
@@ -609,6 +616,8 @@ function updateSelectionActions() {
   }
   selectedText = selection.toString().replace(/\s+/g, ' ').trim();
   if (!selectedText) { selectionBar.hidden = true; return; }
+  if (selectedText !== lastRenderedSelection) selectionBar.querySelector('[data-selection-auto-delete]').checked = false;
+  lastRenderedSelection = selectedText;
   (dialog || document.body).append(selectionBar);
   const rule = selectionBar.querySelector('[data-selection-action="rule"]');
   const ignored = selectionBar.querySelector('[data-selection-action="ignore"]');
@@ -639,7 +648,7 @@ document.addEventListener('selectionchange', () => {
 document.addEventListener('pointerdown', (event) => {
   if (selectionBar.contains(event.target)) {
     selectingAction = true;
-    event.preventDefault();
+    if (event.target.closest('button')) event.preventDefault();
   } else {
     selectingAction = false;
     selectionBar.hidden = true;
@@ -656,12 +665,17 @@ selectionBar.addEventListener('click', async (event) => {
   const action = button.dataset.selectionAction;
   const csrf = document.querySelector('form[action="/logout"] input[name="csrf"]')?.value;
   if (!csrf || !text || text.length > 100 || (action === 'rule' && text.includes(','))) return;
+  if (action === 'ignore' && selectionBar.querySelector('[data-selection-auto-delete]').checked
+      && !confirm('Esta palavra excluirá permanentemente as ofertas e os álbuns correspondentes que já existem. Deseja continuar?')) return;
   selectionBusy = true;
   selectionBar.querySelectorAll('button').forEach((item) => { item.disabled = true; });
   const data = new FormData();
   data.set('csrf', csrf);
   if (action === 'rule') data.set('keyword', text);
-  else data.set('word', text);
+  else {
+    data.set('word', text);
+    if (selectionBar.querySelector('[data-selection-auto-delete]').checked) data.set('auto_delete', 'true');
+  }
   let saved = false;
   try {
     const response = await fetch(action === 'rule' ? '/rules' : '/ignored', {

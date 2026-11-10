@@ -14,6 +14,7 @@ Organização adaptada do RazorMiniflux: contrato operacional na raiz, decisões
 | [ADR-0006](architecture/ADR-0006-extracao-ia-ofertas.md) | Extração manual de ofertas com OpenAI/OpenRouter |
 | [ADR-0007](architecture/ADR-0007-exclusao-logica-alertas.md) | Exclusão lógica e desfazer ações nos cards de alerta |
 | [ADR-0008](architecture/ADR-0008-fila-extracao-concorrente.md) | Concorrência, timeout e reenvio da fila de extração IA |
+| [ADR-0009](architecture/ADR-0009-autoexclusao-permanente.md) | Autoexclusão permanente por palavra ignorada |
 | [Primeira entrega](plans/primeira-entrega.md) | Escopo, critérios de aceite e estado da entrega |
 | [Operação](operacao.md) | Publicação, dados, atualização e recuperação |
 | [Verificação](verificacao.md) | Como repetir testes e limites das evidências |

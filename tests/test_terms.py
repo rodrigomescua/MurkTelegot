@@ -211,6 +211,7 @@ class FrequentTermsTests(unittest.TestCase):
             page = client.get('/terms', cookies=cookies)
             self.assertIn('promoção', page.text)
             self.assertIn('2 ofertas', page.text)
+            self.assertIn('name="auto_delete" value="true"', page.text)
             self.assertNotIn('álbum', page.text.lower())
             self.assertEqual(client.post('/terms/hide', cookies=cookies, data={'word': 'promoção'}).status_code, 403)
             headers = {'Accept': 'application/json'}
@@ -221,11 +222,14 @@ class FrequentTermsTests(unittest.TestCase):
             hidden_id = self.store.rows('SELECT id FROM hidden_suggestions')[0]['id']
             self.assertTrue(client.post(f'/terms/restore/{hidden_id}', cookies=cookies, data={'csrf': main.csrf_token}, headers=headers).json()['ok'])
             self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
-            result = client.post('/terms/ignore', cookies=cookies, data={'csrf': main.csrf_token, 'word': 'promoção'}, follow_redirects=False)
+            result = client.post('/terms/ignore', cookies=cookies,
+                                 data={'csrf': main.csrf_token, 'word': 'promoção', 'auto_delete': 'true'},
+                                 follow_redirects=False)
             self.assertEqual(result.status_code, 303)
             self.assertTrue(result.headers['location'].startswith('/terms?'))
-            self.assertEqual(self.store.feed(), [])
-            self.assertEqual(self.store.unread(), 2)
+            self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+            self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
+            self.assertEqual(self.store.unread(), 0)
 
     def test_frequencies_exclude_ignored_offers_and_whole_albums(self):
         self.add(1, 'Cafeteira PS5 Slim!')
@@ -282,6 +286,16 @@ class FrequentTermsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.add_terms_batch('wrong', ['x'])
         self.assertEqual(len(self.store.rows('SELECT * FROM ignored_keywords')), 2)
+
+    def test_batch_ignore_can_enable_auto_delete_and_remove_existing_offers(self):
+        self.add(1, 'Notebook promoção preço baixo')
+        self.add(2, 'Oferta sem os termos')
+
+        self.assertEqual(self.store.add_terms_batch('ignore', ['promoção', 'preço baixo'], auto_delete=True), 2)
+
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 2}])
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords ORDER BY id'),
+                         [{'auto_delete': 1}, {'auto_delete': 1}])
 
     def test_batch_endpoint_csrf_validation_and_fallback(self):
         with patch.object(main, 'store', self.store):

@@ -258,6 +258,42 @@ class IgnoredWordsTests(unittest.TestCase):
             reopened.add_ignored(' \u0301 ')
         self.assertEqual(Store(self.store.path).rows('SELECT word FROM ignored_keywords'), [{'word': 'Café'}])
 
+    def test_auto_delete_migration_defaults_existing_words_to_false_without_backup_file(self):
+        self.store.add_ignored('Palavra antiga')
+        self.store.execute('ALTER TABLE ignored_keywords DROP COLUMN auto_delete')
+
+        reopened = Store(self.store.path)
+
+        self.assertEqual(reopened.rows('SELECT word,auto_delete FROM ignored_keywords'),
+                         [{'word': 'Palavra antiga', 'auto_delete': 0}])
+        self.assertFalse(Path(str(self.store.path) + '.before-ignored-auto-delete.db').exists())
+
+    def test_auto_delete_on_add_and_existing_rule_physically_removes_matching_albums(self):
+        self.add_offer(1, 'Notebook e PS5 Slim', grouped=55)
+        self.add_offer(2, 'Parte sem termo', grouped=55)
+        self.add_offer(3, 'Notebook sem filtro')
+        self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 2)
+
+        self.assertTrue(self.store.add_ignored('PS5 Slim'))
+        word_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='ps5 slim'")[0]['id']
+        self.assertEqual(self.store.set_ignored_auto_delete(word_id, True), 2)
+
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [{'offer_id': 3, 'rule_id': 1}])
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords WHERE id=?', (word_id,)),
+                         [{'auto_delete': 1}])
+
+    def test_auto_delete_flag_on_creation_deletes_existing_matches_and_false_remains_default(self):
+        self.add_offer(1, 'Notebook com Xbox Series')
+        self.assertTrue(self.store.add_ignored('Xbox Series', auto_delete=True))
+
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 1}])
+
+        self.assertTrue(self.store.add_ignored('Palavra comum'))
+        self.assertEqual(self.store.rows("SELECT auto_delete FROM ignored_keywords WHERE normalized='palavra comum'"),
+                         [{'auto_delete': 0}])
+
 
 class IgnoredWordsWebTests(unittest.TestCase):
     def setUp(self):
@@ -316,6 +352,36 @@ class IgnoredWordsWebTests(unittest.TestCase):
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
         self.assertIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.store.unread(), 1)
+
+    def test_create_with_auto_delete_and_toggle_existing_rule(self):
+        page = self.client.get('/ignored', cookies=self.auth)
+        self.assertIn('name="auto_delete" value="true"', page.text)
+        self.assertIn('Excluir permanentemente ofertas e álbuns correspondentes', page.text)
+        response = self.client.post('/ignored', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'word': 'PS5 Slim', 'auto_delete': 'true'},
+                                    follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 1}])
+
+        self.store.ingest(-100123, 2, 'Xbox Series', '2026-11-04', None)
+        self.store.add_ignored('Xbox Series')
+        word_id = self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='xbox series'")[0]['id']
+        response = self.client.post(f'/ignored/{word_id}/auto-delete', cookies=self.auth,
+                                    content=f'csrf={main.csrf_token}&enabled=false&enabled=true',
+                                    headers={'Content-Type': 'application/x-www-form-urlencoded',
+                                             'Accept': 'application/json'})
+        self.assertEqual(response.json()['deleted'], 1)
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        response = self.client.post(f'/ignored/{word_id}/auto-delete', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'enabled': 'false'},
+                                    headers={'Accept': 'application/json'})
+        self.assertTrue(response.json()['ok'])
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords WHERE id=?', (word_id,)),
+                         [{'auto_delete': 0}])
+        self.store.ingest(-100123, 3, 'Xbox Series', '2026-11-04', None)
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 3}])
 
     def test_invalid_and_html_words_are_handled_safely(self):
         data = {'csrf': main.csrf_token, 'word': '   '}

@@ -154,7 +154,19 @@ async def process_ai_job(job):
                     if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                         request_task.cancel()
                     try:
-                        extraction = await asyncio.wait_for(request_task, timeout=AI_REQUEST_TIMEOUT)
+                        async def cancel_deleted_offer_request():
+                            while not request_task.done():
+                                if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
+                                    request_task.cancel()
+                                    return
+                                await asyncio.sleep(0.1)
+
+                        cancel_watcher = asyncio.create_task(cancel_deleted_offer_request())
+                        try:
+                            extraction = await asyncio.wait_for(request_task, timeout=AI_REQUEST_TIMEOUT)
+                        finally:
+                            cancel_watcher.cancel()
+                            await asyncio.gather(cancel_watcher, return_exceptions=True)
                     finally:
                         ai_requests.pop(job['id'], None)
                 except asyncio.CancelledError:
@@ -613,7 +625,7 @@ async def delete_rule(rule_id: int):
 async def ignored_page(request: Request, notice: str = ''):
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
-        'ignored_words': store.rows('''SELECT id,word,created_at FROM ignored_keywords
+        'ignored_words': store.rows('''SELECT id,word,auto_delete,created_at FROM ignored_keywords
             ORDER BY created_at DESC,id DESC'''),
     })
 
@@ -624,14 +636,28 @@ def ignored_redirect(message):
 
 
 @app.post('/ignored', dependencies=[Depends(authenticate), Depends(csrf)])
-async def add_ignored(request: Request, word: str = Form(..., max_length=100)):
+async def add_ignored(request: Request, word: str = Form(..., max_length=100),
+                      auto_delete: bool = Form(False)):
     try:
-        added = store.add_ignored(word)
-        message = 'Palavra adicionada ao filtro.' if added else 'Esta palavra já está no filtro.'
+        added = store.add_ignored(word, auto_delete=auto_delete)
+        message = ('Palavra adicionada ao filtro com autoexclusão permanente.' if auto_delete else
+                   'Palavra adicionada ao filtro.') if added else 'Esta palavra já está no filtro.'
     except ValueError as exc:
         added, message = False, str(exc)
     if 'application/json' in request.headers.get('accept', ''):
         return JSONResponse({'ok': added, 'message': message}, status_code=200 if added else 400)
+    return ignored_redirect(message)
+
+
+@app.post('/ignored/{word_id}/auto-delete', dependencies=[Depends(authenticate), Depends(csrf)])
+async def set_ignored_auto_delete(request: Request, word_id: int, enabled: bool = Form(...)):
+    deleted = store.set_ignored_auto_delete(word_id, enabled)
+    if deleted is None:
+        raise HTTPException(404, 'Palavra ignorada não encontrada.')
+    message = ('Autoexclusão permanente ativada; ofertas correspondentes apagadas: ' + str(deleted) + '.'
+               if enabled else 'Autoexclusão permanente desativada.')
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': True, 'message': message, 'deleted': deleted})
     return ignored_redirect(message)
 
 
@@ -675,24 +701,29 @@ def term_reply(request, message, page):
 
 
 @app.post('/terms/batch', dependencies=[Depends(authenticate), Depends(csrf)])
-def term_batch(request: Request, action: str = Form(...), words: list[str] = Form(default=[]), page: int = Form(1)):
+def term_batch(request: Request, action: str = Form(...), words: list[str] = Form(default=[]), page: int = Form(1),
+               auto_delete: bool = Form(False)):
     try:
-        count = store.add_terms_batch(action, words)
+        count = store.add_terms_batch(action, words, auto_delete=auto_delete)
     except ValueError as exc:
         if 'application/json' in request.headers.get('accept', ''):
             return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
         return term_reply(request, str(exc), page)
     target = 'ao filtro de ofertas' if action == 'ignore' else 'às sugestões ocultas'
     message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} {target}.'
+    if action == 'ignore' and auto_delete:
+        message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} ao filtro com autoexclusão permanente.'
     return term_reply(request, message, page)
 
 
 @app.post('/terms/{action}', dependencies=[Depends(authenticate), Depends(csrf)])
-def term_action(request: Request, action: str, word: str = Form(..., max_length=100), page: int = Form(1)):
+def term_action(request: Request, action: str, word: str = Form(..., max_length=100), page: int = Form(1),
+                auto_delete: bool = Form(False)):
     try:
         if action == 'ignore':
-            added = store.add_ignored(word)
-            message = 'Palavra adicionada ao filtro de ofertas.' if added else 'Esta palavra já está no filtro.'
+            added = store.add_ignored(word, auto_delete=auto_delete)
+            message = ('Palavra adicionada ao filtro de ofertas com autoexclusão permanente.' if auto_delete else
+                       'Palavra adicionada ao filtro de ofertas.') if added else 'Esta palavra já está no filtro.'
         elif action == 'hide':
             added = store.hide_suggestion(word)
             message = 'Sugestão ocultada desta lista.' if added else 'Esta sugestão já está oculta.'

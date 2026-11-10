@@ -93,6 +93,7 @@ class Store:
                     created_at TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS ignored_keywords (
                     id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE,
+                    auto_delete INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS hidden_suggestions (
                     id INTEGER PRIMARY KEY, word TEXT NOT NULL, normalized TEXT NOT NULL UNIQUE);
@@ -147,6 +148,9 @@ class Store:
                     db.execute(f"ALTER TABLE {table} ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
                 db.execute(f'''UPDATE {table} SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',
                     printf('-%d seconds',(SELECT max(id) FROM {table})-id)) WHERE created_at='' ''')
+            ignored_columns = {r['name'] for r in db.execute('PRAGMA table_info(ignored_keywords)')}
+            if 'auto_delete' not in ignored_columns:
+                db.execute('ALTER TABLE ignored_keywords ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT 0')
             db.commit()
             db.executescript('''
                 CREATE TRIGGER IF NOT EXISTS rules_created AFTER INSERT ON rules WHEN NEW.created_at='' BEGIN
@@ -748,7 +752,7 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM settings WHERE key IN ('gotify_url','gotify_token','gotify_enabled')")
 
-    def add_ignored(self, word):
+    def add_ignored(self, word, auto_delete=False):
         word = word.strip()
         normalized = normalize(word).strip()
         if not normalized:
@@ -757,10 +761,12 @@ class Store:
         if len(normalized) < minimum or normalized.isdigit():
             raise ValueError(f'Use pelo menos {minimum} caracteres e não informe apenas números.')
         with self.connect() as db:
-            inserted = db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized) VALUES(?,?)',
-                                  (word, normalized)).rowcount == 1
+            inserted = db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized,auto_delete) VALUES(?,?,?)',
+                                  (word, normalized, int(auto_delete))).rowcount == 1
             if not inserted:
                 return False
+            if auto_delete:
+                self._permanently_delete_ignored_matches(db, normalized)
             old_pattern = ignored_pattern(row[0] for row in db.execute(
                 'SELECT normalized FROM ignored_keywords WHERE normalized<>?', (normalized,)))
             now = datetime.now(timezone.utc).isoformat()
@@ -778,6 +784,64 @@ class Store:
                               WHERE chat_id=? AND grouped_id=?''',
                            [(now, word, chat_id, grouped_id) for chat_id, grouped_id in albums])
             return inserted
+
+    @staticmethod
+    def _permanently_delete_offers(db, offer_ids):
+        offer_ids = list(set(offer_ids))
+        if not offer_ids:
+            return 0
+        placeholders = ','.join('?' for _ in offer_ids)
+        active_jobs = db.execute(f'''SELECT DISTINCT j.id FROM ai_jobs j
+            JOIN ai_job_items i ON i.job_id=j.id
+            WHERE i.offer_id IN ({placeholders}) AND i.status='processing' AND j.status='running' ''',
+            offer_ids).fetchall()
+        db.execute(f'''UPDATE ai_job_items SET status='cancelled'
+            WHERE offer_id IN ({placeholders}) AND status='queued' ''', offer_ids)
+        for job in active_jobs:
+            db.execute("UPDATE ai_job_items SET status='cancelled' WHERE job_id=? AND status='queued'",
+                       (job['id'],))
+            db.execute("UPDATE ai_jobs SET status='cancelling' WHERE id=?", (job['id'],))
+        pairs = [(offer_id,) for offer_id in offer_ids]
+        db.executemany('DELETE FROM hits WHERE offer_id=?', pairs)
+        return db.executemany('DELETE FROM offers WHERE id=?', pairs).rowcount
+
+    @classmethod
+    def _permanently_delete_ignored_matches(cls, db, normalized):
+        matches = db.execute('SELECT id,chat_id,grouped_id FROM offers WHERE ignored_matches(body,?)',
+                             (normalized,)).fetchall()
+        offer_ids = set()
+        for row in matches:
+            if row['grouped_id'] is None:
+                offer_ids.add(row['id'])
+            else:
+                offer_ids.update(item[0] for item in db.execute(
+                    'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?',
+                    (row['chat_id'], row['grouped_id'])))
+        return cls._permanently_delete_offers(db, offer_ids)
+
+    def set_ignored_auto_delete(self, word_id, enabled):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT normalized FROM ignored_keywords WHERE id=?', (word_id,)).fetchone()
+            if not row:
+                return None
+            db.execute('UPDATE ignored_keywords SET auto_delete=? WHERE id=?', (int(enabled), word_id))
+            return self._permanently_delete_ignored_matches(db, row['normalized']) if enabled else 0
+
+    def auto_delete_album(self, chat_id, grouped_id, bodies):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            patterns = [row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords WHERE auto_delete=1 ORDER BY id')]
+            parts = [row[0] for row in db.execute(
+                'SELECT body FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped_id)))]
+            parts.extend(bodies)
+            if not any(ignored_matches(body, pattern) for pattern in patterns for body in parts):
+                return False
+            ids = [row[0] for row in db.execute(
+                'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped_id)))]
+            self._permanently_delete_offers(db, ids)
+            return True
 
     def _refresh_ignored_at(self, db, chat_id, grouped_id, offer_id, was_ignored):
         rows = db.execute('SELECT id,body,ignored_word FROM offers WHERE chat_id=? AND grouped_id=?' if grouped_id is not None
@@ -890,7 +954,7 @@ class Store:
             return db.execute('INSERT OR IGNORE INTO hidden_suggestions(word,normalized) VALUES(?,?)',
                               (word, normalized)).rowcount == 1
 
-    def add_terms_batch(self, action, words):
+    def add_terms_batch(self, action, words, *, auto_delete=False):
         if action not in ('ignore', 'hide'):
             raise ValueError('Ação inválida.')
         if not words or len(words) > 50:
@@ -899,9 +963,18 @@ class Store:
         minimum = self.frequent_terms_min_chars() if action == 'ignore' else 2
         if any((not normalize(word).strip() if action == 'ignore' else not self.valid_frequent_term(word, minimum)) or len(word) > 100 for word, _ in items):
             raise ValueError(f'Os termos devem ter pelo menos {minimum} caracteres, não ser apenas numéricos e conter até 100 caracteres.')
-        table = 'ignored_keywords' if action == 'ignore' else 'hidden_suggestions'
         with self.connect() as db:
-            return db.executemany(f'INSERT OR IGNORE INTO {table}(word,normalized) VALUES(?,?)', items).rowcount
+            if action == 'hide':
+                return db.executemany('INSERT OR IGNORE INTO hidden_suggestions(word,normalized) VALUES(?,?)',
+                                      items).rowcount
+            count = 0
+            for word, normalized in items:
+                inserted = db.execute('''INSERT OR IGNORE INTO ignored_keywords(word,normalized,auto_delete)
+                    VALUES(?,?,?)''', (word, normalized, int(auto_delete))).rowcount
+                count += inserted
+                if inserted and auto_delete:
+                    self._permanently_delete_ignored_matches(db, normalized)
+            return count
 
     @staticmethod
     def valid_frequent_term(word, minimum=4):
@@ -923,6 +996,7 @@ class Store:
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None, report_alert=False):
         grouped = json.loads(source_json).get('grouped_id') if source_json else None
         with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
             chat = db.execute('SELECT title FROM chats WHERE id=?', (chat_id,)).fetchone()
             if not chat or (not body and not source_json):
                 return
@@ -932,6 +1006,19 @@ class Store:
                                      else 'SELECT id,body FROM offers WHERE id=?',
                                      (chat_id, str(grouped)) if grouped is not None else
                                      (previous['id'],) if previous else (-1,)).fetchall()
+            auto_delete_words = [row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords WHERE auto_delete=1 ORDER BY id')]
+            if any(ignored_matches(part, word) for word in auto_delete_words
+                   for part in [body or '', *(row['body'] or '' for row in prior_group)]):
+                if grouped is not None:
+                    ids = [row[0] for row in db.execute(
+                        'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped)))]
+                    if previous:
+                        ids.append(previous['id'])
+                else:
+                    ids = [previous['id']] if previous else []
+                self._permanently_delete_offers(db, ids)
+                return None
             words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
             was_ignored = any(ignored_matches(row['body'], word) for row in prior_group for word in words)
             had_alert = False
