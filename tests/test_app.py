@@ -262,13 +262,17 @@ class WebTests(unittest.TestCase):
         response = self.client.post('/settings/ai', cookies=self.auth, data={
             'csrf': main.csrf_token, 'openai_key': 'private-key', 'models_openai': ['gpt-mini'],
             'model_order': '[{"provider":"openai","id":"gpt-mini"}]', 'value': '3',
+            'prompt_extra': 'Inclua as condições de uso quando presentes.',
         }, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(main.store.ai_api_key('openai'), 'private-key')
         self.assertEqual(main.store.ai_parallelism(), 3)
+        self.assertEqual(main.store.ai_settings()['prompt_extra'], 'Inclua as condições de uso quando presentes.')
         page = self.client.get('/settings', cookies=self.auth)
         self.assertNotIn('private-key', page.text)
         self.assertIn('Chave configurada', page.text)
+        self.assertIn('Visualizar prompt base enviado à IA', page.text)
+        self.assertIn('Inclua as condições de uso quando presentes.', page.text)
 
     def test_ai_parallelism_setting_requires_auth_csrf_and_renders_saved_value(self):
         self.assertEqual(self.client.post('/settings/ai/parallelism', data={'value': 2},
@@ -333,7 +337,7 @@ class WebTests(unittest.TestCase):
         main.store.ingest(-100123, 1, 'Oferta original: relógio R$ 200', '2026-11-05T12:00:00+00:00', None)
         main.store.save_ai_settings('key-openai', 'key-router', [
             {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
-        ])
+        ], 'Preserve instruções personalizadas.')
         response = self.client.post('/ai-jobs', cookies=self.auth,
                                     data={'csrf': main.csrf_token, 'replace_existing': 'false'},
                                     follow_redirects=False)
@@ -344,11 +348,16 @@ class WebTests(unittest.TestCase):
         self.assertIn('data-job-create', jobs_page.text)
         self.assertIn('Job #1', jobs_page.text)
         self.assertIn('Progresso do job', jobs_page.text)
+        for url in ('/', '/alerts', '/terms/offers?word=relógio'):
+            self.assertIn('IA pendente', self.client.get(url, cookies=self.auth).text)
         self.assertEqual(self.client.get('/ai-jobs/status', cookies=self.auth).status_code, 200)
         job = main.store.claim_ai_job()
         extraction = {
             'product_name': 'Relógio <novo>',
             'original_price': 'R$ 200', 'discounted_price': 'R$ 120', 'coupon_code': 'TEMPO20',
+            'product_present': True,
+            'coupons': [{'store': 'Loja X', 'code': 'TEMPO20', 'conditions': 'Mínimo R$ 100',
+                         'status': 'active'}],
         }
         with patch.object(main, 'extract_ai', side_effect=[AIError('HTTP 429'), extraction]) as extract:
             asyncio.run(main.process_ai_job(job))
@@ -362,6 +371,8 @@ class WebTests(unittest.TestCase):
             self.assertIn('TEMPO20', page.text)
             self.assertNotIn('Modelo premium', page.text)
             self.assertIn('Oferta original: relógio R$ 200', page.text)
+            self.assertIn('Dados retornados pela IA', page.text)
+            self.assertIn(r'M\u00ednimo R$ 100', page.text)
 
     def test_later_default_job_skips_extractions_completed_by_an_earlier_job(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
@@ -390,23 +401,24 @@ class WebTests(unittest.TestCase):
         main.store.ingest(-100123, 1, 'Oferta teste', '2026-11-05T12:00:00+00:00', None)
         main.store.save_ai_settings('key-openai', 'key-router', [
             {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
-        ])
+        ], 'Preserve instruções personalizadas.')
         main.store.enqueue_ai_job()
         job = main.store.claim_ai_job()
         calls = []
 
-        def extract(provider, key, model, text):
-            calls.append((provider, key, model))
+        def extract(provider, key, model, text, prompt_extra=''):
+            calls.append((provider, key, model, prompt_extra))
             if len(calls) == 1:
-                main.store.save_ai_settings('rotated-openai', '', [{'provider': 'openai', 'id': 'replacement'}])
+                main.store.save_ai_settings('rotated-openai', '', [{'provider': 'openai', 'id': 'replacement'}],
+                                            'Instruções atualizadas.')
                 raise AIError('Falha simulada')
             return {'product_name': 'Produto atualizado', 'original_price': None,
                     'discounted_price': None, 'coupon_code': None}
 
         with patch.object(main, 'extract_ai', side_effect=extract):
             asyncio.run(main.process_ai_job(job))
-        self.assertEqual(calls, [('openai', 'key-openai', 'model-first'),
-                                 ('openai', 'rotated-openai', 'replacement')])
+        self.assertEqual(calls, [('openai', 'key-openai', 'model-first', 'Preserve instruções personalizadas.'),
+                                 ('openai', 'rotated-openai', 'replacement', 'Instruções atualizadas.')])
 
     def test_cancel_pending_ai_job_requires_auth_and_csrf(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
@@ -476,7 +488,7 @@ class WebTests(unittest.TestCase):
         job = main.store.claim_ai_job()
         calls = []
 
-        def extract(provider, key, model, text):
+        def extract(provider, key, model, text, prompt_extra=''):
             calls.append(text)
             main.store.cancel_ai_job(job_id)
             return {'product_name': 'Resultado descartado', 'original_price': None,

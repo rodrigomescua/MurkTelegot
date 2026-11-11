@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from telethon import errors
 
-from app.ai import AIError, extract as extract_ai, list_models as list_ai_models
+from app.ai import EXTRACTION_PROMPT, AIError, extract as extract_ai, list_models as list_ai_models
 from app.gotify import send_gotify, validate_gotify_token, validate_gotify_url
 from app.messages import media_info, present, preview_lines, source_data
 from app.store import MAX_AI_PARALLELISM, Store
@@ -173,8 +173,9 @@ async def process_ai_job(job):
                 logging.getLogger(__name__).info('Job de IA %s item %s consultando %s/%s',
                                                  job['id'], item['id'], model['provider'], model['id'])
                 try:
+                    prompt_extra = (await asyncio.to_thread(store.ai_settings))['prompt_extra']
                     request_task = asyncio.create_task(extract_ai(model['provider'], model['api_key'],
-                                                                  model['id'], content['text']))
+                                                                  model['id'], content['text'], prompt_extra))
                     ai_requests[job['id']] = request_task
                     if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                         request_task.cancel()
@@ -438,7 +439,7 @@ async def settings_page(request: Request, notice: str = '', test_error: str = ''
         'token_configured': bool(config['token']), 'notice': notice, 'test_error': test_error,
         'frequent_terms_min_chars': store.frequent_terms_min_chars(),
           'ai_parallelism': store.ai_parallelism(),
-        'ai_config': ai_config,
+        'ai_config': ai_config, 'ai_prompt_base': EXTRACTION_PROMPT,
     })
 
 
@@ -522,6 +523,7 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
                            models_openai: list[str] = Form(default=[]),
                            models_openrouter: list[str] = Form(default=[]),
                            model_order: str = Form('', max_length=100_000),
+                           prompt_extra: str = Form('', max_length=20_000),
                            value: int | None = Form(None)):
     try:
         if value is not None and not 1 <= value <= MAX_AI_PARALLELISM:
@@ -537,7 +539,7 @@ async def save_ai_settings(openai_key: str = Form('', max_length=4096),
         seen = {(item['provider'], item['id']) for item in ordered}
         ordered.extend({'provider': provider, 'id': model} for provider in ('openai', 'openrouter')
                        for model in selected[provider] if (provider, model) not in seen)
-        store.save_ai_settings(openai_key, openrouter_key, ordered)
+        store.save_ai_settings(openai_key, openrouter_key, ordered, prompt_extra)
         if value is not None:
             store.save_ai_parallelism(value)
     except (ValueError, TypeError) as exc:

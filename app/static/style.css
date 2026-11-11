@@ -73,6 +73,8 @@
 @media(max-width:600px){.management-toolbar{align-items:stretch;flex-direction:column;gap:8px}.management-count{margin:0}.management-empty{padding:18px 12px}}
 .offer-open{display:block;width:calc(100% - 24px);margin:0 12px 12px}
 .offer-summary-static{cursor:text}
+.ai-pending-indicator{position:absolute;z-index:2;top:10px;left:10px;display:flex;align-items:center;gap:6px;padding:6px 9px;border:1px solid #ffffff55;border-radius:999px;background:#0e1621eF;color:#fff;font-size:12px;box-shadow:0 2px 8px #0008}.ai-pending-indicator svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}.ai-pending-indicator svg path{transform-origin:12px 12px;animation:ai-pending-spin 1.1s linear infinite}@keyframes ai-pending-spin{to{transform:rotate(360deg)}}.ai-extraction-data{margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}.ai-extraction-data h3{margin:0 0 8px;font-size:15px}.ai-extraction-data pre,.ai-prompt-base pre{max-height:320px;overflow:auto;margin:0;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--bg);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}.ai-prompt-base{margin:14px 0}.ai-prompt-base summary{cursor:pointer;color:var(--accent)}.ai-prompt-base pre{margin-top:10px}
+@media(prefers-reduced-motion:reduce){.ai-pending-indicator svg path{animation:none}}
 .global-undo{position:fixed;z-index:110;right:1rem;bottom:1rem;margin:0;box-shadow:0 .5rem 2rem #0008}
 .coupon-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px;list-style:none;margin:0;padding:0}
 .coupon-card{min-width:0;padding:14px 16px;border:1px solid var(--border);border-radius:10px;background:var(--bg)}

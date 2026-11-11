@@ -111,7 +111,7 @@ class Store:
                 CREATE TABLE IF NOT EXISTS offer_extractions (
                     offer_id INTEGER PRIMARY KEY REFERENCES offers(id) ON DELETE CASCADE,
                     product_name TEXT, original_price TEXT,
-                    discounted_price TEXT, coupon_code TEXT, job_id INTEGER NOT NULL,
+                    discounted_price TEXT, coupon_code TEXT, result_json TEXT, job_id INTEGER NOT NULL,
                     updated_at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS coupons (
                     id INTEGER PRIMARY KEY, store TEXT NOT NULL, store_key TEXT NOT NULL,
@@ -145,6 +145,21 @@ class Store:
             metrics_backfill_done = db.execute(
                 "SELECT 1 FROM settings WHERE key='ai_metrics_backfilled'").fetchone()
             item_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_job_items)')}
+            extraction_columns = {r['name'] for r in db.execute('PRAGMA table_info(offer_extractions)')}
+            if 'result_json' not in extraction_columns:
+                backup = Path(str(path) + '.before-ai-extraction-details.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                db.execute('ALTER TABLE offer_extractions ADD COLUMN result_json TEXT')
             if 'stage' not in item_columns:
                 db.execute("ALTER TABLE ai_job_items ADD COLUMN stage TEXT NOT NULL DEFAULT ''")
             if 'stage_updated_at' not in item_columns:
@@ -368,7 +383,7 @@ class Store:
 
     def ai_settings(self):
         settings = {row['key']: row['value'] for row in self.rows(
-            "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key','ai_model_order')")}
+            "SELECT key,value FROM settings WHERE key IN ('ai_openai_key','ai_openrouter_key','ai_model_order','ai_prompt_extra')")}
         try:
             order = json.loads(settings.get('ai_model_order', '[]'))
         except (TypeError, ValueError):
@@ -381,7 +396,7 @@ class Store:
         return {'providers': {
             'openai': {'configured': bool(settings.get('ai_openai_key')), 'models': [i['id'] for i in order if i['provider'] == 'openai']},
             'openrouter': {'configured': bool(settings.get('ai_openrouter_key')), 'models': [i['id'] for i in order if i['provider'] == 'openrouter']},
-        }, 'model_order': order}
+        }, 'model_order': order, 'prompt_extra': settings.get('ai_prompt_extra', '')}
 
     def ai_parallelism(self):
         rows = self.rows("SELECT value FROM settings WHERE key='ai_parallelism'")
@@ -428,9 +443,11 @@ class Store:
                 isinstance(item.get('id'), str) and item['id'] and
                 settings.get(f"ai_{item['provider']}_key")]
 
-    def save_ai_settings(self, openai_key, openrouter_key, model_order):
+    def save_ai_settings(self, openai_key, openrouter_key, model_order, prompt_extra=''):
         if len(openai_key) > 4096 or len(openrouter_key) > 4096:
             raise ValueError('A chave de API excede o tamanho permitido.')
+        if not isinstance(prompt_extra, str) or len(prompt_extra) > 20000:
+            raise ValueError('As instruções adicionais excedem 20.000 caracteres.')
         if not isinstance(model_order, list) or len(model_order) > 200:
             raise ValueError('Selecione até 200 modelos para a hierarquia.')
         normalized, seen = [], set()
@@ -459,6 +476,8 @@ class Store:
                                (f'ai_{provider}_key', supplied.strip()))
             db.execute('''INSERT INTO settings(key,value) VALUES('ai_model_order',?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (json.dumps(normalized),))
+            db.execute('''INSERT INTO settings(key,value) VALUES('ai_prompt_extra',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (prompt_extra.strip(),))
 
     def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False):
         with self.connect() as db:
@@ -679,14 +698,15 @@ class Store:
                     return 'stale'
                 now = datetime.now(timezone.utc).isoformat(timespec='seconds')
                 db.execute('''INSERT INTO offer_extractions
-                    (offer_id,product_name,original_price,discounted_price,coupon_code,job_id,updated_at)
-                    VALUES(?,?,?,?,?,?,?) ON CONFLICT(offer_id) DO UPDATE SET
+                    (offer_id,product_name,original_price,discounted_price,coupon_code,result_json,job_id,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(offer_id) DO UPDATE SET
                     product_name=excluded.product_name,
                     original_price=excluded.original_price,discounted_price=excluded.discounted_price,
-                    coupon_code=excluded.coupon_code,job_id=excluded.job_id,updated_at=excluded.updated_at''',
+                    coupon_code=excluded.coupon_code,result_json=excluded.result_json,
+                    job_id=excluded.job_id,updated_at=excluded.updated_at''',
                            (item['offer_id'], *(extraction.get(field) for field in
                             ('product_name', 'original_price', 'discounted_price', 'coupon_code')),
-                            item['job_id'], now))
+                            json.dumps(extraction, ensure_ascii=False), item['job_id'], now))
                 coupon_saved = False
                 for coupon in extraction.get('coupons', []):
                     store, code = coupon.get('store'), coupon.get('code')
@@ -1467,14 +1487,23 @@ class Store:
             return
         ids = [card['id'] for card in cards]
         found = {}
+        found_data = {}
         for row in db.execute('''SELECT * FROM offer_extractions WHERE offer_id IN (''' +
                               ','.join('?' for _ in ids) + ')', ids):
             extraction = {key: row[key] for key in
                           ('product_name', 'original_price', 'discounted_price', 'coupon_code')}
-            if any(extraction.values()):
-                found[row['offer_id']] = extraction
+            try:
+                data = json.loads(row['result_json']) if row['result_json'] else extraction
+            except (TypeError, ValueError):
+                data = extraction
+            found[row['offer_id']] = extraction
+            found_data[row['offer_id']] = data if isinstance(data, dict) else extraction
+        pending = {row['offer_id'] for row in db.execute('''SELECT DISTINCT offer_id FROM ai_job_items
+            WHERE offer_id IN (''' + ','.join('?' for _ in ids) + ") AND status IN ('queued','processing')", ids)}
         for card in cards:
             card['extraction'] = found.get(card['id'])
+            card['extraction_data'] = found_data.get(card['id'])
+            card['ai_pending'] = card['id'] in pending
 
     def new_offers(self, after, q='', alerts=False):
         with self.connect() as db:

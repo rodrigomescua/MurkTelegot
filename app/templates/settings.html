@@ -28,6 +28,10 @@
 <p class="field-help" data-model-status="{{ provider }}" role="status" aria-live="polite"></p>
 </div>{% endfor %}
 </div>
+<details class="ai-prompt-base"><summary>Visualizar prompt base enviado à IA</summary><pre>{{ ai_prompt_base }}</pre></details>
+<label for="ai-prompt-extra">Instruções adicionais do prompt</label>
+<textarea id="ai-prompt-extra" name="prompt_extra" rows="6" maxlength="20000" aria-describedby="ai-prompt-extra-help">{{ ai_config.prompt_extra }}</textarea>
+<p class="field-help" id="ai-prompt-extra-help">Essas instruções serão acrescentadas ao prompt base. O formato JSON e as regras de segurança do prompt base continuam aplicáveis.</p>
 <div class="model-priority"><h3>Ordem de uso</h3><p class="field-help">Modelos marcados serão tentados nesta ordem. Selecione modelos acima e use os botões para ajustar.</p><ol id="model-priority-list">{% for item in ai_config.model_order %}<li data-priority-item data-provider="{{ item.provider }}" data-model="{{ item.id }}"><span>{{ 'OpenAI' if item.provider == 'openai' else 'OpenRouter' }} · {{ item.id }}</span><button type="button" class="secondary" data-move="up" aria-label="Mover {{ item.id }} para cima">↑</button><button type="button" class="secondary" data-move="down" aria-label="Mover {{ item.id }} para baixo">↓</button></li>{% endfor %}</ol><p id="priority-status" class="field-help" role="status" aria-live="polite"></p>
 <label for="ai-parallelism">Jobs de extração simultâneos</label><input id="ai-parallelism" name="value" type="number" min="1" max="8" value="{{ ai_parallelism }}" required><p class="field-help">Limite de jobs ativos nesta instância (1 a 8).</p></div>
 <button>Salvar configuração de IA</button>
