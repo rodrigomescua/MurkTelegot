@@ -99,11 +99,26 @@ async def ai_job_loop():
 
 async def ai_job_worker():
     while True:
-        job = await asyncio.to_thread(store.claim_ai_job)
+        try:
+            job = await asyncio.to_thread(store.claim_ai_job)
+        except Exception:
+            logging.getLogger(__name__).exception('Falha ao buscar job de IA na fila')
+            await asyncio.sleep(1)
+            continue
         if not job:
             await asyncio.sleep(1)
             continue
-        await process_ai_job(job)
+        logging.getLogger(__name__).info('Job de IA %s iniciado', job['id'])
+        try:
+            await process_ai_job(job)
+        except Exception:
+            logging.getLogger(__name__).exception('Worker de IA falhou no job %s', job['id'])
+            try:
+                await asyncio.to_thread(store.fail_ai_job, job['id'], 'Falha interna no worker de IA.')
+            except Exception:
+                logging.getLogger(__name__).exception('Não foi possível finalizar job de IA %s após falha', job['id'])
+            continue
+        logging.getLogger(__name__).info('Job de IA %s encerrado', job['id'])
 
 
 async def process_ai_job(job):
@@ -111,6 +126,9 @@ async def process_ai_job(job):
         item = await asyncio.to_thread(store.claim_ai_item, job['id'])
         if not item:
             break
+        await asyncio.to_thread(store.update_ai_item_stage, item['id'], 'Preparando oferta')
+        logging.getLogger(__name__).info('Job de IA %s iniciou item %s (oferta %s)',
+                                         job['id'], item['id'], item['message_id'])
         try:
             if not job['replace_existing'] and await asyncio.to_thread(store.ai_item_has_extraction, item):
                 await asyncio.to_thread(store.finish_ai_item, item['id'], 'skipped')
@@ -129,6 +147,7 @@ async def process_ai_job(job):
                 if await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
                     break
+                await asyncio.to_thread(store.update_ai_item_stage, item['id'], 'Selecionando modelo')
                 models = ([] if len(attempted) >= 200 else
                           await asyncio.to_thread(store.configured_ai_models))
                 model = next((candidate for candidate in models
@@ -137,6 +156,8 @@ async def process_ai_job(job):
                 if not model:
                     if had_failure and await asyncio.to_thread(
                             store.requeue_failed_ai_item, job['id'], item['id'], 1):
+                        logging.getLogger(__name__).info(
+                            'Job de IA %s item %s reenfileirado após falha dos modelos', job['id'], item['id'])
                         return
                     detail = ('Limite de 200 tentativas por oferta atingido.' if len(attempted) >= 200 else
                               'Nenhum modelo está configurado para as próximas tentativas.')
@@ -147,6 +168,10 @@ async def process_ai_job(job):
                 attempted.add((model['provider'], model['id'],
                                hashlib.sha256(model['api_key'].encode()).digest()))
                 started = time.monotonic()
+                await asyncio.to_thread(store.update_ai_item_stage, item['id'],
+                                         f"Consultando {model['provider']} · {model['id']}")
+                logging.getLogger(__name__).info('Job de IA %s item %s consultando %s/%s',
+                                                 job['id'], item['id'], model['provider'], model['id'])
                 try:
                     request_task = asyncio.create_task(extract_ai(model['provider'], model['api_key'],
                                                                   model['id'], content['text']))
@@ -175,20 +200,26 @@ async def process_ai_job(job):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
                     outcome = 'cancelled'
                     detail = 'Conexão local interrompida; o provedor ainda pode continuar o processamento ou cobrar.'
+                    failure_type = ''
                     finished = True
                 except (AIError, ValueError) as exc:
                     detail = str(exc)
                     outcome = 'failed'
+                    failure_type = getattr(exc, 'failure_type', 'invalid_response')
                 except asyncio.TimeoutError:
                     detail = 'Tempo limite de 1 minuto excedido.'
                     outcome = 'failed'
+                    failure_type = 'request_timeout'
                 except Exception:
                     detail = 'Falha interna ao consultar o modelo.'
                     outcome = 'failed'
+                    failure_type = 'internal'
                 else:
                     detail = 'Dados comerciais extraídos.'
                     outcome = 'succeeded'
+                    failure_type = ''
                 if outcome == 'succeeded':
+                    await asyncio.to_thread(store.update_ai_item_stage, item['id'], 'Salvando resultado')
                     saved = await asyncio.to_thread(store.finish_ai_item, item['id'], 'succeeded',
                                                     extraction, content['content_hash'])
                     if saved == 'stale':
@@ -200,7 +231,11 @@ async def process_ai_job(job):
                     finished = True
                 await asyncio.to_thread(store.record_ai_attempt, job['id'], item['id'],
                                          model['provider'], model['id'], outcome, detail,
-                                         int((time.monotonic() - started) * 1000))
+                                         int((time.monotonic() - started) * 1000), failure_type)
+                logging.getLogger(__name__).info(
+                    'Job de IA %s item %s modelo %s/%s resultado=%s tipo=%s duração_ms=%s',
+                    job['id'], item['id'], model['provider'], model['id'], outcome,
+                    failure_type or '-', int((time.monotonic() - started) * 1000))
                 had_failure = had_failure or outcome == 'failed'
                 if outcome == 'failed' and await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
@@ -208,9 +243,10 @@ async def process_ai_job(job):
                 if outcome in ('succeeded', 'skipped', 'cancelled'):
                     finished = True
         except Exception:
-            logging.getLogger(__name__).warning('Falha ao processar job de IA %s, oferta %s',
-                                                job['id'], item['id'])
+            logging.getLogger(__name__).exception('Falha ao processar item %s do job de IA %s',
+                                                  item['id'], job['id'])
             await asyncio.to_thread(store.finish_ai_item, item['id'], 'failed')
+    logging.getLogger(__name__).info('Finalizando job de IA %s', job['id'])
     await asyncio.to_thread(store.finish_ai_job, job['id'])
 
 
@@ -417,7 +453,7 @@ async def ai_jobs_page(request: Request, notice: str = ''):
         ai_config['providers'][item['provider']]['configured'] for item in ai_config['model_order'])
     return templates.TemplateResponse(request, 'ai_jobs.html', {
         'csrf': csrf_token, 'jobs': jobs, 'active_job': active, 'notice': notice,
-        'ai_config': ai_config,
+        'ai_config': ai_config, 'model_metrics': store.ai_model_metrics(),
     })
 
 
@@ -439,7 +475,7 @@ async def clear_all_ai_jobs():
 
 @app.get('/ai-jobs/status', dependencies=[Depends(authenticate)])
 async def ai_jobs_status():
-    return {'active_job': store.ai_job_status()}
+    return {'active_job': store.ai_job_status(), 'model_metrics': store.ai_model_metrics()}
 
 
 @app.post('/ai-jobs/{job_id}/cancel', dependencies=[Depends(authenticate), Depends(csrf)])

@@ -122,13 +122,30 @@ class Store:
                     id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
                     position INTEGER NOT NULL, offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
+                    stage TEXT NOT NULL DEFAULT '', stage_updated_at TEXT,
                     UNIQUE(job_id, position));
                 CREATE TABLE IF NOT EXISTS ai_job_attempts (
                     id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
                     item_id INTEGER NOT NULL REFERENCES ai_job_items(id) ON DELETE CASCADE,
                     provider TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL,
-                    detail TEXT NOT NULL, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL);
+                    detail TEXT NOT NULL, duration_ms INTEGER NOT NULL, created_at TEXT NOT NULL,
+                    failure_type TEXT NOT NULL DEFAULT '');
+                CREATE TABLE IF NOT EXISTS ai_model_metrics (
+                    provider TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL,
+                    failure_type TEXT NOT NULL DEFAULT '', attempts INTEGER NOT NULL DEFAULT 0,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(provider,model,outcome,failure_type));
             ''')
+            metrics_backfill_done = db.execute(
+                "SELECT 1 FROM settings WHERE key='ai_metrics_backfilled'").fetchone()
+            item_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_job_items)')}
+            if 'stage' not in item_columns:
+                db.execute("ALTER TABLE ai_job_items ADD COLUMN stage TEXT NOT NULL DEFAULT ''")
+            if 'stage_updated_at' not in item_columns:
+                db.execute('ALTER TABLE ai_job_items ADD COLUMN stage_updated_at TEXT')
+            attempt_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_job_attempts)')}
+            if 'failure_type' not in attempt_columns:
+                db.execute("ALTER TABLE ai_job_attempts ADD COLUMN failure_type TEXT NOT NULL DEFAULT ''")
             created_at_tables = [table for table in ('rules', 'ignored_keywords')
                                  if 'created_at' not in {r['name'] for r in db.execute(f'PRAGMA table_info({table})')}]
             if created_at_tables:
@@ -153,6 +170,17 @@ class Store:
             if 'auto_delete' not in ignored_columns:
                 db.execute('ALTER TABLE ignored_keywords ADD COLUMN auto_delete INTEGER NOT NULL DEFAULT 0')
             db.commit()
+            if not metrics_backfill_done:
+                db.execute('''INSERT OR IGNORE INTO ai_model_metrics
+                    (provider,model,outcome,failure_type,attempts,duration_ms)
+                    SELECT provider,model,outcome,
+                        CASE WHEN outcome='failed' THEN coalesce(nullif(failure_type,''),'legacy') ELSE '' END,
+                        count(*),sum(duration_ms)
+                    FROM ai_job_attempts WHERE provider!='sistema' AND outcome IN ('succeeded','failed')
+                    GROUP BY provider,model,outcome,
+                        CASE WHEN outcome='failed' THEN coalesce(nullif(failure_type,''),'legacy') ELSE '' END''')
+                db.execute("INSERT INTO settings(key,value) VALUES('ai_metrics_backfilled','1')")
+                db.commit()
             db.executescript('''
                 CREATE TRIGGER IF NOT EXISTS rules_created AFTER INSERT ON rules WHEN NEW.created_at='' BEGIN
                     UPDATE rules SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
@@ -475,6 +503,40 @@ class Store:
             db.execute("UPDATE ai_jobs SET status='queued',started_at=NULL WHERE status='running'")
             db.execute('DELETE FROM ai_jobs WHERE clear_requested=1')
 
+    def update_ai_item_stage(self, item_id, stage):
+        with self.connect() as db:
+            db.execute('UPDATE ai_job_items SET stage=?,stage_updated_at=? WHERE id=? AND status=\'processing\'',
+                       (stage, datetime.now(timezone.utc).isoformat(timespec='seconds'), item_id))
+
+    def fail_ai_job(self, job_id, detail):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            job = db.execute('SELECT status FROM ai_jobs WHERE id=?', (job_id,)).fetchone()
+            if not job:
+                return
+            if job['status'] == 'cancelling':
+                db.execute("UPDATE ai_job_items SET status='cancelled',stage='Cancelado' WHERE job_id=? AND status IN ('queued','processing')",
+                           (job_id,))
+                db.execute("UPDATE ai_jobs SET status='cancelled',finished_at=? WHERE id=?",
+                           (datetime.now(timezone.utc).isoformat(timespec='seconds'), job_id))
+                db.execute('DELETE FROM ai_jobs WHERE id=? AND clear_requested=1', (job_id,))
+                return
+            item = db.execute("SELECT * FROM ai_job_items WHERE job_id=? AND status='processing' LIMIT 1",
+                              (job_id,)).fetchone()
+            if item:
+                now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+                db.execute('''INSERT INTO ai_job_attempts
+                    (job_id,item_id,provider,model,outcome,detail,duration_ms,created_at,failure_type)
+                    VALUES(?,?,'sistema','-','failed',?,0,?,'internal')''',
+                           (job_id, item['id'], detail[:300], now))
+                db.execute("UPDATE ai_job_items SET status='failed',stage='Falha interna',stage_updated_at=? WHERE id=?",
+                           (now, item['id']))
+            db.execute("UPDATE ai_job_items SET status='failed',stage='Falha interna' WHERE job_id=? AND status='queued'",
+                       (job_id,))
+            db.execute("UPDATE ai_jobs SET status='failed',finished_at=? WHERE id=? AND status='running'",
+                       (datetime.now(timezone.utc).isoformat(timespec='seconds'), job_id))
+            db.execute('DELETE FROM ai_jobs WHERE id=? AND clear_requested=1', (job_id,))
+
     def claim_ai_job(self):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -543,13 +605,44 @@ class Store:
     def ai_item_has_extraction(self, item):
         return bool(self.rows('SELECT 1 FROM offer_extractions WHERE offer_id=?', (item['offer_id'],)))
 
-    def record_ai_attempt(self, job_id, item_id, provider, model, outcome, detail, duration_ms):
+    def record_ai_attempt(self, job_id, item_id, provider, model, outcome, detail, duration_ms,
+                          failure_type=''):
         created = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        duration_ms = max(0, duration_ms)
         with self.connect() as db:
             db.execute('''INSERT INTO ai_job_attempts
-                (job_id,item_id,provider,model,outcome,detail,duration_ms,created_at)
-                VALUES(?,?,?,?,?,?,?,?)''',
-                       (job_id, item_id, provider, model, outcome, detail[:300], max(0, duration_ms), created))
+                (job_id,item_id,provider,model,outcome,detail,duration_ms,created_at,failure_type)
+                VALUES(?,?,?,?,?,?,?,?,?)''',
+                       (job_id, item_id, provider, model, outcome, detail[:300], duration_ms, created,
+                        failure_type))
+            if provider != 'sistema' and outcome in ('succeeded', 'failed'):
+                db.execute('''INSERT INTO ai_model_metrics
+                    (provider,model,outcome,failure_type,attempts,duration_ms) VALUES(?,?,?,?,1,?)
+                    ON CONFLICT(provider,model,outcome,failure_type) DO UPDATE SET
+                    attempts=attempts+1,duration_ms=duration_ms+excluded.duration_ms''',
+                           (provider, model, outcome, failure_type if outcome == 'failed' else '', duration_ms))
+
+    def ai_model_metrics(self):
+        with self.connect() as db:
+            rows = db.execute('''SELECT provider,model,
+                sum(CASE WHEN outcome='succeeded' THEN attempts ELSE 0 END) AS succeeded,
+                sum(CASE WHEN outcome='failed' THEN attempts ELSE 0 END) AS failed,
+                sum(CASE WHEN outcome IN ('succeeded','failed') THEN duration_ms ELSE 0 END) AS duration_ms,
+                sum(CASE WHEN outcome IN ('succeeded','failed') THEN attempts ELSE 0 END) AS total
+                FROM ai_model_metrics GROUP BY provider,model ORDER BY provider,model''').fetchall()
+            failures = db.execute("SELECT provider,model,failure_type,attempts FROM ai_model_metrics WHERE outcome='failed' ORDER BY provider,model,failure_type").fetchall()
+        by_model = {(row['provider'], row['model']): {} for row in rows}
+        for row in failures:
+            by_model[(row['provider'], row['model'])][row['failure_type']] = row['attempts']
+        return [{**dict(row), 'failures_by_type': by_model[(row['provider'], row['model'])],
+                 'average_ms': round(row['duration_ms'] / row['total']) if row['total'] else 0}
+                for row in rows]
+
+    def ai_active_item(self, job_id):
+        with self.connect() as db:
+            row = db.execute("SELECT message_id,stage,stage_updated_at FROM ai_job_items WHERE job_id=? AND status='processing' LIMIT 1",
+                             (job_id,)).fetchone()
+        return dict(row) if row else None
 
     def finish_ai_item(self, item_id, status, extraction=None, content_hash=None):
         if status not in ('succeeded', 'failed', 'skipped', 'cancelled'):
@@ -673,6 +766,7 @@ class Store:
             job['skipped'] = job['skipped'] or 0
             job['cancelled'] = job['cancelled'] or 0
             job['logs'] = by_job[job['id']]
+            job['active_item'] = self.ai_active_item(job['id']) if job['status'] == 'running' else None
         active = min((job for job in jobs if job['status'] in ('queued', 'running', 'cancelling')),
                      key=lambda job: (0 if job['status'] == 'running' else
                                       1 if job['status'] == 'cancelling' else 2,
@@ -696,6 +790,7 @@ class Store:
         result = dict(row)
         for key in ('processed', 'succeeded', 'failed', 'skipped', 'cancelled'):
             result[key] = result[key] or 0
+        result['active_item'] = self.ai_active_item(result['id']) if result['status'] == 'running' else None
         return result
 
     def add_rule(self, term, *, return_alerts=False):

@@ -293,6 +293,10 @@ class WebTests(unittest.TestCase):
             'SELECT outcome FROM ai_job_attempts WHERE job_id=? ORDER BY id', (job_id,))]
         self.assertEqual(outcomes.count('retry'), 1)
         self.assertEqual(outcomes.count('failed'), 3)
+        self.assertEqual(main.store.rows("SELECT failure_type,count(*) AS n FROM ai_job_attempts WHERE provider='openai' GROUP BY failure_type"),
+                         [{'failure_type': 'request_timeout', 'n': 2}])
+        self.assertEqual(main.store.ai_model_metrics()[0]['failures_by_type'], {'request_timeout': 2})
+        self.assertIn('Métricas dos modelos', self.client.get('/ai-jobs', cookies=self.auth).text)
 
     def test_ai_catalog_uses_typed_key_without_persisting_it(self):
         self.assertEqual(self.client.post('/settings/ai/models', headers={'Accept': 'application/json'}, data={

@@ -56,6 +56,18 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(AIError):
                     await extract('openai', 'key', 'model', 'Oferta')
 
+    async def test_provider_http_errors_have_stable_failure_categories(self):
+        from app.ai import request
+        async def handler(_request):
+            return httpx.Response(429, json={'error': 'private provider detail'})
+        client_class = httpx.AsyncClient
+        with patch('app.ai.httpx.AsyncClient', side_effect=lambda **kwargs:
+                   client_class(transport=httpx.MockTransport(handler), **kwargs)):
+            with self.assertRaises(AIError) as raised:
+                await request('openai', 'key', '/models')
+        self.assertEqual(raised.exception.failure_type, 'rate_limit')
+        self.assertNotIn('private provider detail', str(raised.exception))
+
 
 class AIStoreTests(unittest.TestCase):
     def setUp(self):
@@ -68,6 +80,67 @@ class AIStoreTests(unittest.TestCase):
         self.store.save_ai_settings('secret-openai', 'secret-router', [
             {'provider': 'openai', 'id': 'a'}, {'provider': 'openrouter', 'id': 'b'},
         ])
+
+    def test_model_metrics_persist_by_model_and_failure_type_after_job_cleanup(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        self.store.record_ai_attempt(job_id, item['id'], 'openai', 'a', 'succeeded', 'OK', 1000)
+        self.store.record_ai_attempt(job_id, item['id'], 'openai', 'a', 'failed', '429', 3000, 'rate_limit')
+        self.store.record_ai_attempt(job_id, item['id'], 'openai', 'a', 'failed', 'bad response', 2000,
+                                     'invalid_response')
+        metric = self.store.ai_model_metrics()[0]
+        self.assertEqual((metric['succeeded'], metric['failed'], metric['total'], metric['average_ms']),
+                         (1, 2, 3, 2000))
+        self.assertEqual(metric['failures_by_type'], {'invalid_response': 1, 'rate_limit': 1})
+        self.store.clear_completed_ai_jobs()
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM ai_jobs'), [{'n': 1}])
+        self.store.finish_ai_item(item['id'], 'failed')
+        self.store.finish_ai_job(job_id)
+        self.store.clear_completed_ai_jobs()
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM ai_job_attempts'), [{'n': 0}])
+        self.assertEqual(self.store.ai_model_metrics(), [metric])
+
+    def test_existing_attempts_are_backfilled_once_when_metrics_are_added(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        self.store.record_ai_attempt(job_id, item['id'], 'openai', 'a', 'failed', 'HTTP 429', 1000)
+        self.store.execute('DROP TABLE ai_model_metrics')
+        self.store.execute("DELETE FROM settings WHERE key='ai_metrics_backfilled'")
+        migrated = Store(self.store.path)
+        metrics = migrated.ai_model_metrics()
+        self.assertEqual(metrics[0]['failures_by_type'], {'legacy': 1})
+        self.assertEqual(Store(self.store.path).ai_model_metrics(), metrics)
+
+    def test_running_job_reports_current_item_stage(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        self.store.update_ai_item_stage(item['id'], 'Consultando openai · a')
+        active = self.store.ai_job_status()
+        self.assertEqual(active['active_item']['stage'], 'Consultando openai · a')
+        self.assertTrue(active['active_item']['stage_updated_at'])
+
+    def test_worker_failure_marks_job_terminal_and_logs_internal_failure(self):
+        self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        self.store.fail_ai_job(job_id, 'Falha interna no worker de IA.')
+        self.assertEqual(self.store.rows('SELECT status FROM ai_jobs WHERE id=?', (job_id,)),
+                         [{'status': 'failed'}])
+        self.assertEqual(self.store.rows('SELECT status FROM ai_job_items WHERE id=?', (item['id'],)),
+                         [{'status': 'failed'}])
+        self.assertEqual(self.store.rows('SELECT failure_type FROM ai_job_attempts WHERE job_id=?', (job_id,)),
+                         [{'failure_type': 'internal'}])
 
     def test_settings_keep_keys_private_and_survive_reopen(self):
         self.save_models()

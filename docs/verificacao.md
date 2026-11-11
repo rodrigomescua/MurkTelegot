@@ -216,3 +216,9 @@ O app local não estava em execução. A suíte passou com 149 testes; `bash -n 
 ## Release 0.5.12 e loja Runtipi — 2026-11-08
 
 Commit `132492a` enviado a `main`; CI de push `42523438261` passou. Release `v0.5.12` no mesmo commit; workflow `42523550148` aprovou `test` e `publish`. GHCR confirmou `ghcr.io/rodrigomescua/murktelegot:0.5.12`, índice OCI `sha256:16f21a967d4e8362408108225a7d0b25bf0150d1194505367440b466a9855a26`, plataforma `linux/amd64`. Catálogo Runtipi atualizado pela PR [1469](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1469), merge `701bfbc`; checks `test`/`renovate` passaram e CI pós-merge `42524031012` passou com 462 testes. `tipi_version` passou de 41 para 42. A instância Runtipi não foi atualizada.
+
+## Observabilidade e métricas da fila de IA — 2026-11-11
+
+173 testes `unittest` passaram. Cobrem categorias estáveis de HTTP, persistência por modelo/tipo, duração média, preservação após apagar histórico, importação única das tentativas antigas, etapa atual e finalização do job após falha interna. `py_compile app/ai.py app/main.py app/store.py`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram.
+
+Chromium com banco e ofertas sintéticas em 390 px e 1365 px conferiu etapa corrente, taxas, porcentagem das categorias de falha e tempo médio; não houve overflow horizontal nem erros JavaScript. Duas consultas consecutivas ao status ficaram separadas por 1.995 ms. Nenhuma conta Telegram, banco pessoal ou provedor de IA real foi usado; o sintoma em produção não foi reproduzido.

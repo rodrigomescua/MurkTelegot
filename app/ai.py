@@ -16,7 +16,9 @@ MAX_RESPONSE_BYTES = 3 * 1024 * 1024
 
 
 class AIError(ValueError):
-    pass
+    def __init__(self, message, failure_type='provider'):
+        super().__init__(message)
+        self.failure_type = failure_type
 
 
 async def request(provider, api_key, path, payload=None):
@@ -35,37 +37,43 @@ async def request(provider, api_key, path, payload=None):
                     reasons = {400: 'Requisição recusada', 401: 'Chave inválida ou sem acesso',
                                403: 'Acesso ao modelo negado', 404: 'Modelo ou endpoint não encontrado',
                                408: 'Tempo de resposta esgotado', 429: 'Limite de uso atingido'}
-                    raise AIError(f"{reasons.get(response.status_code, 'Falha do provedor')} (HTTP {response.status_code})")
+                    failure_type = ('rate_limit' if response.status_code == 429 else
+                                    'authentication' if response.status_code in (401, 403) else
+                                    'model_not_found' if response.status_code == 404 else
+                                    'provider_timeout' if response.status_code == 408 else
+                                    'provider_request' if response.status_code < 500 else 'provider_http')
+                    raise AIError(f"{reasons.get(response.status_code, 'Falha do provedor')} (HTTP {response.status_code})",
+                                  failure_type)
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)
                     if len(body) > MAX_RESPONSE_BYTES:
-                        raise AIError('A resposta do provedor excedeu o limite permitido.')
+                        raise AIError('A resposta do provedor excedeu o limite permitido.', 'invalid_response')
         return json.loads(body)
     except httpx.TimeoutException:
-        raise AIError('Tempo de conexão esgotado.') from None
+        raise AIError('Tempo de conexão esgotado.', 'network_timeout') from None
     except httpx.RequestError as exc:
         reason = exc.__cause__
         if isinstance(reason, ssl.SSLCertVerificationError):
-            detail = 'Certificado HTTPS inválido.'
+            detail, failure_type = 'Certificado HTTPS inválido.', 'network_tls'
         elif isinstance(reason, ssl.SSLError):
-            detail = 'Falha TLS na conexão.'
+            detail, failure_type = 'Falha TLS na conexão.', 'network_tls'
         elif isinstance(reason, ConnectionRefusedError):
-            detail = 'Conexão recusada.'
+            detail, failure_type = 'Conexão recusada.', 'network'
         elif isinstance(reason, (TimeoutError, socket.timeout)):
-            detail = 'Tempo de conexão esgotado.'
+            detail, failure_type = 'Tempo de conexão esgotado.', 'network_timeout'
         else:
-            detail = 'Falha de rede ao consultar o provedor.'
-        raise AIError(detail) from None
+            detail, failure_type = 'Falha de rede ao consultar o provedor.', 'network'
+        raise AIError(detail, failure_type) from None
     except (json.JSONDecodeError, UnicodeDecodeError):
-        raise AIError('O provedor retornou uma resposta inválida.') from None
+        raise AIError('O provedor retornou uma resposta inválida.', 'invalid_response') from None
 
 
 async def list_models(provider, api_key):
     result = await request(provider, api_key, '/models')
     rows = result.get('data') if isinstance(result, dict) else None
     if not isinstance(rows, list):
-        raise AIError('O provedor retornou um catálogo inválido.')
+        raise AIError('O provedor retornou um catálogo inválido.', 'invalid_response')
     models = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -109,4 +117,4 @@ async def extract(provider, api_key, model, offer_text):
             raise ValueError()
         return extracted
     except (KeyError, IndexError, TypeError, ValueError):
-        raise AIError('Resposta de extração inválida ou sem dados utilizáveis.') from None
+        raise AIError('Resposta de extração inválida ou sem dados utilizáveis.', 'invalid_response') from None

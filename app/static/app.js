@@ -880,6 +880,37 @@ const activeJobPanel = document.querySelector('[data-active-job]');
 if (activeJobPanel) {
   let refreshingJobs = false;
   const jobStatusLabels = {queued: 'Na fila', running: 'Em andamento', cancelling: 'Cancelamento solicitado', cancelled: 'Cancelado', completed: 'Concluído', completed_with_errors: 'Concluído com falhas', failed: 'Com falhas'};
+  const failureLabels = {authentication: 'autenticação/acesso', rate_limit: 'limite de uso', provider_http: 'HTTP do provedor', provider_timeout: 'timeout do provedor', provider_request: 'requisição recusada', model_not_found: 'modelo inexistente', network_tls: 'TLS', network_timeout: 'timeout de rede', network: 'rede', request_timeout: 'timeout da chamada', invalid_response: 'resposta inválida', internal: 'falha interna', legacy: 'histórica'};
+  const renderModelMetrics = metrics => {
+    const container = document.querySelector('[data-model-metrics]');
+    if (!container) return;
+    let grid = container.querySelector('.model-metric-grid');
+    if (!metrics?.length) {
+      grid?.remove();
+      if (!container.querySelector('[data-metrics-empty]')) {
+        const empty = document.createElement('p'); empty.className = 'field-help'; empty.dataset.metricsEmpty = '';
+        empty.textContent = 'Ainda não há chamadas concluídas para medir.'; container.append(empty);
+      }
+      return;
+    }
+    container.querySelector('[data-metrics-empty]')?.remove();
+    if (!grid) { grid = document.createElement('div'); grid.className = 'model-metric-grid'; container.append(grid); }
+    grid.replaceChildren(...metrics.map(metric => {
+      const card = document.createElement('article'); card.className = 'model-metric';
+      const title = document.createElement('h3');
+      title.textContent = `${metric.provider === 'openai' ? 'OpenAI' : metric.provider === 'openrouter' ? 'OpenRouter' : metric.provider} · ${metric.model}`;
+      const total = Number(metric.total) || 0, succeeded = Number(metric.succeeded) || 0, failed = Number(metric.failed) || 0;
+      const summary = document.createElement('p');
+      summary.textContent = `${succeeded} sucessos (${(succeeded * 100 / total).toFixed(1)}%) · ${failed} falhas (${(failed * 100 / total).toFixed(1)}%)`;
+      const duration = document.createElement('p');
+      duration.textContent = `Tempo médio: ${(Number(metric.average_ms) / 1000).toFixed(1)} s · ${total} chamadas`;
+      const failures = document.createElement('p');
+      const kinds = Object.entries(metric.failures_by_type || {});
+      failures.textContent = kinds.length ? `Falhas: ${kinds.map(([kind, count]) => `${failureLabels[kind] || kind} ${count} (${(count * 100 / total).toFixed(1)}%)`).join(' · ')}` : 'Falhas por tipo: nenhuma';
+      card.append(title, summary, duration, failures);
+      return card;
+    }));
+  };
   const updateJobProgress = async () => {
     if (refreshingJobs || document.visibilityState !== 'visible') return;
     refreshingJobs = true;
@@ -901,6 +932,14 @@ if (activeJobPanel) {
       activeJobPanel.querySelector('[data-active-status]').textContent = jobStatusLabels[job.status] || 'Status atualizado';
       activeJobPanel.querySelector('[data-active-summary]').textContent = `${processed} de ${total} ofertas processadas · ${job.succeeded} concluídas · ${job.skipped} puladas · ${job.failed} com erro · ${job.cancelled} canceladas`;
       activeJobPanel.querySelector('[data-active-percent]').textContent = `${processed} de ${total} (${percent}%)`;
+      const item = job.active_item;
+      if (item) {
+        const updated = Date.parse(item.stage_updated_at);
+        const seconds = Number.isFinite(updated) ? Math.max(0, Math.floor((Date.now() - updated) / 1000)) : 0;
+        const age = seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min`;
+        activeJobPanel.querySelector('[data-active-stage]').textContent = `Oferta #${item.message_id} · ${item.stage || 'Preparando'} · nesta etapa há ${age}`;
+      } else activeJobPanel.querySelector('[data-active-stage]').textContent = 'Aguardando próxima oferta';
+      renderModelMetrics(result.model_metrics);
       const cancelForm = activeJobPanel.querySelector('[data-job-cancel]');
       if (cancelForm) cancelForm.hidden = !['queued', 'running'].includes(job.status);
       let cancelNotice = activeJobPanel.querySelector('[data-cancel-notice]');
@@ -913,5 +952,5 @@ if (activeJobPanel) {
       activeJobPanel.querySelector('[data-active-summary]').textContent = 'Não foi possível atualizar agora. Tentando novamente…';
     } finally { refreshingJobs = false; }
   };
-  window.setInterval(updateJobProgress, 5000);
+  window.setInterval(updateJobProgress, 2000);
 }
