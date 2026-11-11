@@ -457,6 +457,20 @@ async def ai_jobs_page(request: Request, notice: str = ''):
     })
 
 
+@app.get('/coupons', dependencies=[Depends(authenticate)])
+async def coupons_page(request: Request, notice: str = ''):
+    return templates.TemplateResponse(request, 'coupons.html', {
+        'csrf': csrf_token, 'stores': store.coupons_by_store(), 'notice': notice,
+    })
+
+
+@app.post('/coupons/{coupon_id}/inactive', dependencies=[Depends(authenticate), Depends(csrf)])
+async def mark_coupon_inactive(coupon_id: int):
+    changed = await asyncio.to_thread(store.mark_coupon_inactive, coupon_id)
+    notice = 'Cupom marcado como inativo.' if changed else 'Cupom não encontrado.'
+    return RedirectResponse('/coupons?' + urlencode({'notice': notice}), status_code=303)
+
+
 @app.post('/ai-jobs/clear-completed', dependencies=[Depends(authenticate), Depends(csrf)])
 async def clear_completed_ai_jobs():
     await asyncio.to_thread(store.clear_completed_ai_jobs)

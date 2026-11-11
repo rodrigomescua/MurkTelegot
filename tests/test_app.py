@@ -206,7 +206,7 @@ class WebTests(unittest.TestCase):
         main.store.execute('INSERT INTO chats VALUES(-100123,?)', ('Grupo',))
         main.store.add_rule('Notebook')
         main.store.ingest(-100123, 1, 'Notebook oferta', '2026-11-07T12:00:00+00:00', None)
-        for path in ('/', '/alerts', '/telegram', '/rules-page', '/terms', '/groups',
+        for path in ('/', '/alerts', '/telegram', '/rules-page', '/terms', '/groups', '/coupons',
                      '/ignored', '/ai-jobs', '/settings'):
             with self.subTest(path=path):
                 response = self.client.get(path, cookies=self.auth)
@@ -216,6 +216,22 @@ class WebTests(unittest.TestCase):
         count = self.client.get('/alerts/unread-count', cookies=self.auth)
         self.assertEqual(count.json(), {'unread': 1})
         self.assertEqual(TestClient(main.app).get('/alerts/unread-count', follow_redirects=False).status_code, 303)
+
+    def test_coupons_page_and_manual_inactivation_require_auth_and_csrf(self):
+        main.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,conditions,status,inactive_at,updated_at)
+            VALUES(?,?,?,?,?,'active',NULL,'now')''', ('Loja X', 'loja x', 'SAVE', 'save', 'Mínimo R$ 100'))
+        page = self.client.get('/coupons', cookies=self.auth)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('Loja X', page.text)
+        self.assertIn('Mínimo R$ 100', page.text)
+        self.assertEqual(self.client.get('/coupons', follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post('/coupons/1/inactive', cookies=self.auth,
+                                          data={'csrf': 'invalid'}).status_code, 403)
+        response = self.client.post('/coupons/1/inactive', cookies=self.auth,
+                                    data={'csrf': main.csrf_token}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(main.store.rows('SELECT status FROM coupons'), [{'status': 'inactive'}])
 
     def test_compact_page_titles_and_navigation_order(self):
         home = self.client.get('/', cookies=self.auth).text
@@ -230,7 +246,7 @@ class WebTests(unittest.TestCase):
         self.assertNotIn('Veja palavras e expressões de até três palavras', terms)
         nav = home.split('<div id="main-nav" class="main-nav">', 1)[1].split('</div>', 1)[0]
         positions = [nav.index(f'href="{path}"') for path in
-                     ('/', '/alerts', '/rules-page', '/terms', '/telegram', '/groups', '/ignored', '/ai-jobs', '/settings')]
+                     ('/', '/alerts', '/rules-page', '/terms', '/telegram', '/groups', '/coupons', '/ignored', '/ai-jobs', '/settings')]
         self.assertEqual(positions, sorted(positions))
 
     def test_ai_settings_use_auth_csrf_and_never_render_saved_keys(self):

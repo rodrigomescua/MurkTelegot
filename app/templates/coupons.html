@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h1 class="page-title">Cupons</h1>
+{% if notice %}<p class="toast" role="status" data-toast>{{ notice }}</p>{% endif %}
+{% if stores %}
+  <div class="management-page">
+  {% for group in stores %}
+    <section class="management-panel">
+      <h2>{{ group.store }}</h2>
+      {% if group.coupons %}
+      <ul class="coupon-list">{% for coupon in group.coupons %}
+        <li class="coupon-card">
+          <div class="coupon-heading"><strong class="coupon-code">{{ coupon.code }}</strong>
+            <span class="coupon-status">{{ 'Inativo' if coupon.status == 'inactive' else 'Ativo' }}</span>
+          </div>
+          <p class="coupon-conditions"><strong>Condições:</strong> {{ coupon.conditions or 'Não informadas' }}</p>
+          {% if not coupon.inactive_at %}
+          <form method="post" action="/coupons/{{ coupon.id }}/inactive">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="secondary">Inativar</button>
+          </form>
+          {% endif %}
+        </li>
+      {% endfor %}</ul>
+      {% else %}<p class="muted">Nenhum cupom cadastrado nesta loja.</p>{% endif %}
+    </section>
+  {% endfor %}
+  </div>
+{% else %}<p class="muted">Nenhum cupom cadastrado.</p>{% endif %}
+{% endblock %}

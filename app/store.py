@@ -113,6 +113,12 @@ class Store:
                     product_name TEXT, original_price TEXT,
                     discounted_price TEXT, coupon_code TEXT, job_id INTEGER NOT NULL,
                     updated_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS coupons (
+                    id INTEGER PRIMARY KEY, store TEXT NOT NULL, store_key TEXT NOT NULL,
+                    code TEXT NOT NULL, code_key TEXT NOT NULL, conditions TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('active','inactive')),
+                    inactive_at TEXT, updated_at TEXT NOT NULL,
+                    UNIQUE(store_key,code_key));
                 CREATE TABLE IF NOT EXISTS ai_jobs (
                     id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
                     models_json TEXT NOT NULL, created_at TEXT NOT NULL,
@@ -250,6 +256,7 @@ class Store:
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_deleted ON offers(deleted_at) WHERE deleted_at IS NOT NULL')
+            db.execute('CREATE INDEX IF NOT EXISTS coupons_inactive ON coupons(inactive_at) WHERE inactive_at IS NOT NULL')
 
     def _migrate_rule_terms(self, db, path):
         marker = 'rules_one_term_v1'
@@ -680,6 +687,35 @@ class Store:
                            (item['offer_id'], *(extraction.get(field) for field in
                             ('product_name', 'original_price', 'discounted_price', 'coupon_code')),
                             item['job_id'], now))
+                coupon_saved = False
+                for coupon in extraction.get('coupons', []):
+                    store, code = coupon.get('store'), coupon.get('code')
+                    if not store or not code:
+                        continue
+                    store_key, code_key = store.strip().casefold(), code.strip().casefold()
+                    if not store_key or not code_key:
+                        continue
+                    coupon_saved = True
+                    existing = db.execute('SELECT id,status,inactive_at FROM coupons WHERE store_key=? AND code_key=?',
+                                          (store_key, code_key)).fetchone()
+                    inactive = coupon.get('status') == 'inactive' or (existing and existing['status'] == 'inactive')
+                    inactive_at = (existing['inactive_at'] if existing and existing['inactive_at'] else now) if inactive else None
+                    db.execute('''INSERT INTO coupons
+                        (store,store_key,code,code_key,conditions,status,inactive_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(store_key,code_key) DO UPDATE SET
+                        store=excluded.store,code=excluded.code,conditions=coalesce(excluded.conditions,coupons.conditions),
+                        status=excluded.status,inactive_at=coalesce(coupons.inactive_at,excluded.inactive_at),
+                        updated_at=excluded.updated_at''',
+                               (store, store_key, code, code_key, coupon.get('conditions'),
+                                'inactive' if inactive else 'active', inactive_at, now))
+                if extraction.get('product_present') is False:
+                    if coupon_saved:
+                        ids = [row['id'] for row in db.execute(
+                            'SELECT id FROM offers WHERE chat_id=? AND (id=? OR (? IS NOT NULL AND grouped_id=?))',
+                            (root['chat_id'], root['id'], root['grouped_id'], root['grouped_id']))]
+                        if ids:
+                            db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in ids])
+                            db.executemany('DELETE FROM offers WHERE id=?', [(offer_id,) for offer_id in ids])
             db.execute('UPDATE ai_job_items SET status=? WHERE id=?', (status, item_id))
             return status
 
@@ -1274,6 +1310,24 @@ class Store:
                     WHERE a.chat_id IS NULL AND g.latest < CASE
                         WHEN i.chat_id IS NOT NULL THEN julianday(?) ELSE julianday(?) END)''',
                 (short, long))
+            db.execute("DELETE FROM coupons WHERE status='inactive' AND inactive_at<=?", (short,))
+
+    def coupons_by_store(self):
+        with self.connect() as db:
+            rows = [dict(row) for row in db.execute(
+                'SELECT * FROM coupons ORDER BY store_key,store COLLATE NOCASE,code_key')]
+        stores = []
+        for row in rows:
+            if not stores or stores[-1]['key'] != row['store_key']:
+                stores.append({'key': row['store_key'], 'store': row['store'], 'coupons': []})
+            stores[-1]['coupons'].append(row)
+        return stores
+
+    def mark_coupon_inactive(self, coupon_id):
+        now = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        with self.connect() as db:
+            return db.execute("UPDATE coupons SET status='inactive',inactive_at=coalesce(inactive_at,?),updated_at=? WHERE id=?",
+                              (now, now, coupon_id)).rowcount
 
     def delete_offer(self, offer_id):
         with self.connect() as db:
