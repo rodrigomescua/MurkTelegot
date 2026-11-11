@@ -67,7 +67,7 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             assert auto_delete.is_checked()
             page.locator('.selection-actions [data-selection-action=ignore]').tap()
             assert not dialogs
-            page.get_by_text('Palavra adicionada ao filtro com autoexclusão permanente.').wait_for()
+            page.get_by_text('Palavra salva no filtro com autoexclusão permanente.').wait_for()
             assert page.locator('.offer-modal #action-status').is_visible()
             page.locator('.offer-modal .modal-close').tap()
             page.reload()
@@ -89,7 +89,7 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             page.locator('[data-quick="quick-ignored"]').tap()
             page.locator('#quick-word').fill('termo-sem-autoexclusao')
             page.locator('#quick-ignored button:not(.quick-close)').tap()
-            page.get_by_text('Palavra adicionada ao filtro.').wait_for()
+            page.get_by_text('Palavra salva no filtro.').wait_for()
             assert not dialogs
             page.locator('.settings-accordion').nth(1).locator(':scope > summary').tap()
             page.locator('#gotify-token').fill('valor-sensível-sintético')

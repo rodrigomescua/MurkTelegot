@@ -10,7 +10,7 @@ Os cards de alerta aparecem na Home, na página de Alertas e nas ofertas de term
 
 ## Decisão
 
-Persistir `offers.deleted_at` para exclusão lógica. Marcar como lido e excluir atualizam o card no lugar sem recarregar; a tela oferece desfazer enquanto permanecer aberta. Leitura só muda o card para a seção de lidos após recarregar.
+Persistir `offers.deleted_at` para exclusão lógica. Marcar como lido e excluir atualizam o card sem recarregar e o movem ao fim da grade atual. Um único botão flutuante oferece desfazer para a ação mais recente por cinco segundos; cada card mantém seu próprio desfazer até a tela ser fechada ou atualizada. Leitura só muda o card para a seção de lidos após recarregar.
 
 Excluir oculta imediatamente a oferta ou álbum em todas as listas, contagens e links de mídia. O desfazer limpa `deleted_at` no álbum. A limpeza já executada ao iniciar e a cada cinco minutos remove ofertas excluídas há pelo menos uma hora, junto com seus hits. A migração é aditiva e cria índice parcial para localizar exclusões pendentes.
 

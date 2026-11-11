@@ -44,9 +44,29 @@ for number in range(1, 22):
             unread_cards = page.locator('section[aria-labelledby="unread-title"] .offer-card')
             unread_card = unread_cards.first
             card_id = unread_card.get_attribute('id')
+            unread_card = page.locator(f'#{card_id}')
             unread_card.locator('[data-mark-seen] button').tap()
             unread_card.get_by_text('Alerta marcado como lido.').wait_for()
             assert unread_card.get_attribute('id') == card_id
+            assert page.locator('[data-global-undo]').count() == 1
+            assert page.locator('[data-global-undo]').is_visible()
+            assert unread_cards.last.get_attribute('id') == card_id
+            other_card = unread_cards.first
+            other_id = other_card.get_attribute('id')
+            other_card = page.locator(f'#{other_id}')
+            other_card.locator('[data-mark-seen] button').tap()
+            other_card.locator('.offer-action-overlay').wait_for(state='visible')
+            assert page.locator('[data-global-undo]').evaluate('(el) => el.dataset.card') == f'#{other_id}'
+            page.locator('[data-global-undo]').tap()
+            other_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            assert unread_card.locator('.offer-action-overlay').is_visible()
+            unread_card.get_by_role('button', name='Desfazer').tap()
+            unread_card.locator('.offer-action-overlay').wait_for(state='hidden')
+            unread_card.locator('[data-mark-seen] button').tap()
+            unread_card.locator('.offer-action-overlay').wait_for(state='visible')
+            page.wait_for_timeout(5100)
+            assert page.locator('[data-global-undo]').is_hidden()
+            assert unread_card.get_by_role('button', name='Desfazer').is_visible()
             unread_card.get_by_role('button', name='Desfazer').tap()
             unread_card.locator('.offer-action-overlay').wait_for(state='hidden')
             unread_card.locator('[data-mark-seen] button').tap()
@@ -59,7 +79,8 @@ for number in range(1, 22):
             csrf = read_card.locator('[data-delete-offer] input[name="csrf"]').get_attribute('value')
             read_card.locator('[data-delete-offer] button').tap()
             read_card.get_by_text('Oferta excluída.').wait_for()
-            read_card.get_by_role('button', name='Desfazer').tap()
+            assert page.locator('[data-global-undo]').is_visible()
+            page.locator('[data-global-undo]').tap()
             read_card.locator('.offer-action-overlay').wait_for(state='hidden')
             read_card.locator('[data-delete-offer] button').tap()
             page.reload()

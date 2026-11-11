@@ -127,6 +127,25 @@ class StoreTests(unittest.TestCase):
                          [{'seen': 0}, {'seen': 0}])
         self.assertEqual(len(self.store.feed(alerts=True)), 3)
 
+    def test_add_rule_removes_equal_or_containing_ignored_filters_atomically(self):
+        self.store.add_ignored('notebook')
+        self.store.add_ignored('supernotebook')
+        self.store.add_ignored('café notebook pro')
+        self.store.add_ignored('xbox series')
+        self.store.ingest(-100123, 10, 'supernotebook oferta', '2026-11-04T12:00:00+00:00', None)
+        self.store.ingest(-100123, 11, 'café notebook pro', '2026-11-04T12:00:01+00:00', None)
+        self.store.ingest(-100123, 12, 'xbox series', '2026-11-04T12:00:02+00:00', None)
+
+        self.store.add_rule('NOTÉBOOK')
+
+        self.assertEqual(self.store.rows('SELECT normalized FROM ignored_keywords'),
+                         [{'normalized': 'xbox series'}])
+        self.assertEqual({row['message_id'] for row in self.store.feed()}, {10, 11})
+        self.assertEqual(self.store.rows('''SELECT ignored_at,ignored_word FROM offers
+                                            WHERE message_id IN (10,11) ORDER BY message_id'''),
+                         [{'ignored_at': None, 'ignored_word': None},
+                          {'ignored_at': None, 'ignored_word': None}])
+
     def test_add_rule_notifies_each_matching_album_once(self):
         self.store.ingest(-100123, 10, 'Café já alertado', '2026-11-04T12:00:00+00:00', None,
                           source_json='{"grouped_id": 50}')

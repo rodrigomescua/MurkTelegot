@@ -226,12 +226,15 @@ async function handleOfferCardSubmit(event) {
   const action = form.matches('[data-mark-seen]') ? 'seen' : form.matches('[data-delete-offer]') ? 'delete' : null;
   const undo = form.matches('[data-card-undo]');
   if (!action && !undo) return;
+  let sequence = 0;
+  const card = form.closest('.offer-card');
+  if (!card) return;
   event.preventDefault();
   if (form.dataset.busy) return;
+  if (action) sequence = ++cardActionSequence;
   form.dataset.busy = 'true';
   const button = event.submitter || form.querySelector('button');
   button.disabled = true;
-  const card = form.closest('.offer-card');
   const overlay = card.querySelector('.offer-action-overlay');
   try {
     const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
@@ -246,6 +249,7 @@ async function handleOfferCardSubmit(event) {
       actions.inert = false;
       overlay.hidden = true;
       overlay.querySelector('strong').textContent = '';
+      if (globalUndo?.dataset.card === `#${CSS.escape(card.id)}`) hideGlobalUndo();
       card.querySelector('.offer-open')?.focus({preventScroll: true});
     } else {
       const undoForm = overlay.querySelector('[data-card-undo]');
@@ -255,7 +259,12 @@ async function handleOfferCardSubmit(event) {
       card.classList.add('offer-card-actioned');
       overlay.querySelector('strong').textContent = action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.';
       overlay.hidden = false;
-      undoForm.querySelector('button').focus({preventScroll: true});
+      card.parentElement.append(card);
+      if (sequence > globalUndoSequence) {
+        globalUndoSequence = sequence;
+        showGlobalUndo(card, action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.');
+        globalUndo?.focus({preventScroll: true});
+      }
     }
   } catch (error) {
     const message = error.message || 'Não foi possível confirmar a operação. Tente novamente.';
@@ -265,6 +274,29 @@ async function handleOfferCardSubmit(event) {
     button.disabled = false;
   }
 }
+let cardActionSequence = 0;
+let globalUndoSequence = 0;
+const globalUndo = document.querySelector('[data-global-undo]');
+function hideGlobalUndo() {
+  if (!globalUndo) return;
+  clearTimeout(globalUndo.undoTimer);
+  globalUndo.hidden = true;
+  globalUndo.removeAttribute('data-card');
+}
+function showGlobalUndo(card, message) {
+  if (!globalUndo) return;
+  clearTimeout(globalUndo.undoTimer);
+  globalUndo.dataset.card = `#${CSS.escape(card.id)}`;
+  globalUndo.querySelector('span').textContent = `${message} Desfazer`;
+  globalUndo.hidden = false;
+  globalUndo.undoTimer = setTimeout(hideGlobalUndo, 5000);
+}
+document.addEventListener('click', (event) => {
+  if (!event.target.closest('[data-global-undo]')) return;
+  const card = document.querySelector(globalUndo.dataset.card);
+  const form = card?.querySelector('[data-card-undo]');
+  if (form) form.requestSubmit();
+});
 document.addEventListener('click', (event) => {
   const summary = event.target.closest('.offer-summary');
   if (!summary) return;
@@ -384,9 +416,9 @@ if (feed) {
     finally { busy = false; }
   }
   updateButton.addEventListener('click', refreshFeed);
-  feed.addEventListener('submit', handleOfferCardSubmit);
   setInterval(poll, 30000);
 }
+document.addEventListener('submit', handleOfferCardSubmit);
 
 
 const ignoredSettings = document.querySelector('#ignored-settings');

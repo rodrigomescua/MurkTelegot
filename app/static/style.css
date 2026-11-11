@@ -73,3 +73,4 @@
 @media(max-width:600px){.management-toolbar{align-items:stretch;flex-direction:column;gap:8px}.management-count{margin:0}.management-empty{padding:18px 12px}}
 .offer-open{display:block;width:calc(100% - 24px);margin:0 12px 12px}
 .offer-summary-static{cursor:text}
+.global-undo{position:fixed;z-index:110;right:1rem;bottom:1rem;margin:0;box-shadow:0 .5rem 2rem #0008}

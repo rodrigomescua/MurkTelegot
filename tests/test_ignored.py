@@ -54,6 +54,19 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(len(self.store.feed()), 3)
         self.assertEqual(self.store.unread(), 3)
 
+    def test_existing_ignored_word_updates_auto_delete_flag(self):
+        self.add_offer(1, 'xps5pro oferta')
+        self.assertTrue(self.store.add_ignored('xps5pro'))
+        self.assertFalse(self.store.add_ignored('xps5pro'))
+        self.assertTrue(self.store.add_ignored('XPS5PRO', auto_delete=True))
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 1}])
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+
+        self.assertTrue(self.store.add_ignored('xps5pro', auto_delete=False))
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 0}])
+        self.add_offer(2, 'xps5pro continua oculto')
+        self.assertEqual([row['message_id'] for row in self.store.feed()], [])
+
     def test_ignored_timestamp_backfills_new_match_and_preserves_overlapping_rules(self):
         self.add_offer(1, 'Oferta PS5 Slim e Xbox Series')
         self.assertTrue(self.store.add_ignored('PS5 Slim'))
@@ -373,6 +386,13 @@ class IgnoredWordsWebTests(unittest.TestCase):
         duplicate = self.client.post('/ignored', cookies=self.auth, data={**data, 'word': 'ps5 slim'}, headers={'Accept': 'application/json'})
         self.assertEqual(duplicate.status_code, 400)
         self.assertIn('já está no filtro', duplicate.json()['message'])
+        updated = self.client.post('/ignored', cookies=self.auth,
+            data={**data, 'word': 'ps5 slim', 'auto_delete': 'true'}, headers={'Accept': 'application/json'})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 1}])
+        updated = self.client.post('/ignored', cookies=self.auth, data=data, headers={'Accept': 'application/json'})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords'), [{'auto_delete': 0}])
         response = self.client.post('/ignored/1/delete', cookies=self.auth,
                                     data={'csrf': main.csrf_token, 'alerts': 'true', 'q': 'Notebook'},
                                     follow_redirects=False)

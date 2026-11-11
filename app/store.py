@@ -710,6 +710,20 @@ class Store:
             db.executemany('INSERT INTO hits(offer_id,rule_id) VALUES(?,?)',
                            [(offer_id, rule_id) for offer_id in matched])
             db.executemany('UPDATE offers SET seen=0 WHERE id=?', [(offer_id,) for offer_id in matched])
+            normalized = normalize(term).strip()
+            ignored = db.execute('SELECT id,normalized FROM ignored_keywords WHERE instr(normalized,?)>0',
+                                 (normalized,)).fetchall()
+            if ignored:
+                affected = {}
+                for row in ignored:
+                    for offer in db.execute('''SELECT id,chat_id,grouped_id FROM offers
+                                               WHERE ignored_matches(body,?)''', (row['normalized'],)):
+                        key = (offer['chat_id'], offer['grouped_id']) if offer['grouped_id'] is not None else (
+                            offer['chat_id'], None, offer['id'])
+                        affected[key] = offer
+                db.executemany('DELETE FROM ignored_keywords WHERE id=?', [(row['id'],) for row in ignored])
+                for offer in affected.values():
+                    self._refresh_ignored_at(db, offer['chat_id'], offer['grouped_id'], offer['id'], True)
             if return_alerts:
                 if not matched:
                     return 0, []
@@ -762,12 +776,18 @@ class Store:
         if len(normalized) < minimum or normalized.isdigit():
             raise ValueError(f'Use pelo menos {minimum} caracteres e não informe apenas números.')
         with self.connect() as db:
-            inserted = db.execute('INSERT OR IGNORE INTO ignored_keywords(word,normalized,auto_delete) VALUES(?,?,?)',
-                                  (word, normalized, int(auto_delete))).rowcount == 1
-            if not inserted:
-                return False
+            row = db.execute('SELECT id,auto_delete FROM ignored_keywords WHERE normalized=?', (normalized,)).fetchone()
+            if row:
+                if row['auto_delete'] == int(auto_delete):
+                    return False
+                db.execute('UPDATE ignored_keywords SET auto_delete=? WHERE id=?', (int(auto_delete), row['id']))
+            else:
+                db.execute('INSERT INTO ignored_keywords(word,normalized,auto_delete) VALUES(?,?,?)',
+                           (word, normalized, int(auto_delete)))
             if auto_delete:
                 self._permanently_delete_ignored_matches(db, normalized)
+            if row:
+                return True
             old_pattern = ignored_pattern(row[0] for row in db.execute(
                 'SELECT normalized FROM ignored_keywords WHERE normalized<>?', (normalized,)))
             now = datetime.now(timezone.utc).isoformat()
@@ -784,7 +804,7 @@ class Store:
             db.executemany('''UPDATE offers SET ignored_at=coalesce(ignored_at,?),ignored_word=?
                               WHERE chat_id=? AND grouped_id=?''',
                            [(now, word, chat_id, grouped_id) for chat_id, grouped_id in albums])
-            return inserted
+            return True
 
     @staticmethod
     def _permanently_delete_offers(db, offer_ids):
@@ -1020,10 +1040,17 @@ class Store:
                                       items).rowcount
             count = 0
             for word, normalized in items:
-                inserted = db.execute('''INSERT OR IGNORE INTO ignored_keywords(word,normalized,auto_delete)
-                    VALUES(?,?,?)''', (word, normalized, int(auto_delete))).rowcount
-                count += inserted
-                if inserted and auto_delete:
+                row = db.execute('SELECT id,auto_delete FROM ignored_keywords WHERE normalized=?',
+                                 (normalized,)).fetchone()
+                if row:
+                    if row['auto_delete'] == int(auto_delete):
+                        continue
+                    db.execute('UPDATE ignored_keywords SET auto_delete=? WHERE id=?', (int(auto_delete), row['id']))
+                else:
+                    db.execute('INSERT INTO ignored_keywords(word,normalized,auto_delete) VALUES(?,?,?)',
+                               (word, normalized, int(auto_delete)))
+                count += 1
+                if auto_delete:
                     self._permanently_delete_ignored_matches(db, normalized)
             return count
 

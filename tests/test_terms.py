@@ -296,6 +296,9 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 2}])
         self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords ORDER BY id'),
                          [{'auto_delete': 1}, {'auto_delete': 1}])
+        self.assertEqual(self.store.add_terms_batch('ignore', ['promoção', 'preço baixo']), 2)
+        self.assertEqual(self.store.rows('SELECT auto_delete FROM ignored_keywords ORDER BY id'),
+                         [{'auto_delete': 0}, {'auto_delete': 0}])
 
     def test_batch_endpoint_csrf_validation_and_fallback(self):
         with patch.object(main, 'store', self.store):

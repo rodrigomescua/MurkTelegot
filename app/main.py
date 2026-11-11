@@ -640,8 +640,8 @@ async def add_ignored(request: Request, word: str = Form(..., max_length=100),
                       auto_delete: bool = Form(False)):
     try:
         added = store.add_ignored(word, auto_delete=auto_delete)
-        message = ('Palavra adicionada ao filtro com autoexclusão permanente.' if auto_delete else
-                   'Palavra adicionada ao filtro.') if added else 'Esta palavra já está no filtro.'
+        message = ('Palavra salva no filtro com autoexclusão permanente.' if auto_delete else
+                   'Palavra salva no filtro.') if added else 'Esta palavra já está no filtro.'
     except ValueError as exc:
         added, message = False, str(exc)
     if 'application/json' in request.headers.get('accept', ''):
@@ -715,9 +715,12 @@ def term_batch(request: Request, action: str = Form(...), words: list[str] = For
             return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
         return term_reply(request, str(exc), page)
     target = 'ao filtro de ofertas' if action == 'ignore' else 'às sugestões ocultas'
-    message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} {target}.'
-    if action == 'ignore' and auto_delete:
-        message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} ao filtro com autoexclusão permanente.'
+    if action == 'ignore':
+        message = f'{count} {"termo salvo" if count == 1 else "termos salvos"} {target}.'
+        if auto_delete:
+            message = f'{count} {"termo salvo" if count == 1 else "termos salvos"} ao filtro com autoexclusão permanente.'
+    else:
+        message = f'{count} {"termo adicionado" if count == 1 else "termos adicionados"} {target}.'
     return term_reply(request, message, page)
 
 
@@ -727,8 +730,8 @@ def term_action(request: Request, action: str, word: str = Form(..., max_length=
     try:
         if action == 'ignore':
             added = store.add_ignored(word, auto_delete=auto_delete)
-            message = ('Palavra adicionada ao filtro de ofertas com autoexclusão permanente.' if auto_delete else
-                       'Palavra adicionada ao filtro de ofertas.') if added else 'Esta palavra já está no filtro.'
+            message = ('Palavra salva no filtro de ofertas com autoexclusão permanente.' if auto_delete else
+                       'Palavra salva no filtro de ofertas.') if added else 'Esta palavra já está no filtro.'
         elif action == 'hide':
             added = store.hide_suggestion(word)
             message = 'Sugestão ocultada desta lista.' if added else 'Esta sugestão já está oculta.'
