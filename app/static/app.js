@@ -194,6 +194,53 @@ offerModal.innerHTML = '<div class="modal-heading"><h2 id="offer-modal-title"></
 document.body.append(offerModal);
 let modalDetail;
 let modalTrigger;
+let extractionPoll;
+function renderExtractionState(form, state) {
+  const status = form.querySelector('[data-extraction-status]');
+  const button = form.querySelector('button');
+  const labels = {idle: 'Aguardando início.', queued: 'Na fila…', processing: 'Extraindo…', succeeded: 'Extração concluída.', failed: 'Falha na extração.'};
+  status.textContent = state.message || labels[state.status] || 'Estado desconhecido.';
+  button.disabled = state.status === 'queued' || state.status === 'processing';
+  if (state.status === 'succeeded' && state.extraction) {
+    let section = form.parentElement.querySelector('.ai-extraction-data');
+    if (!section) {
+      section = document.createElement('section');
+      section.className = 'ai-extraction-data';
+      section.innerHTML = '<h3>Dados retornados pela IA</h3><pre><code></code></pre>';
+      form.after(section);
+    }
+    section.querySelector('pre code').textContent = JSON.stringify(state.extraction, null, 2);
+  }
+}
+async function pollExtraction(form) {
+  const url = `/offers/${encodeURIComponent(form.action.split('/').at(-2))}/extraction-status`;
+  try {
+    const response = await fetch(url, {credentials: 'same-origin', headers: {Accept: 'application/json'}});
+    if (!response.ok) throw new Error();
+    const state = await response.json();
+    renderExtractionState(form, state);
+    if (offerModal.open && (state.status === 'queued' || state.status === 'processing')) extractionPoll = setTimeout(() => pollExtraction(form), 1500);
+  } catch { form.querySelector('[data-extraction-status]').textContent = 'Não foi possível consultar o estado da extração.'; }
+}
+offerModal.addEventListener('submit', async (event) => {
+  const form = event.target.closest('[data-reextract]');
+  if (!form) return;
+  event.preventDefault();
+  if (form.dataset.busy) return;
+  form.dataset.busy = 'true';
+  const button = form.querySelector('button');
+  button.disabled = true;
+  form.querySelector('[data-extraction-status]').textContent = 'Enviando…';
+  try {
+    const response = await fetch(form.action, {method: 'POST', body: new FormData(form), credentials: 'same-origin', headers: {Accept: 'application/json'}});
+    const result = await response.json();
+    if (!response.ok || result.ok === false) throw new Error(result.message || 'Não foi possível iniciar a extração.');
+    await pollExtraction(form);
+  } catch (error) {
+    button.disabled = false;
+    form.querySelector('[data-extraction-status]').textContent = error.message || 'Não foi possível iniciar a extração.';
+  } finally { delete form.dataset.busy; }
+});
 function showOffer(detail, trigger) {
   if (offerModal.open) return;
   modalDetail = detail;
@@ -213,6 +260,8 @@ offerModal.addEventListener('click', (event) => {
   }
 });
 offerModal.addEventListener('close', () => {
+  clearTimeout(extractionPoll);
+  extractionPoll = null;
   const content = offerModal.querySelector('.offer-expanded');
   content.querySelectorAll('video, audio').forEach((media) => media.pause());
   modalDetail.append(content);
@@ -220,6 +269,17 @@ offerModal.addEventListener('close', () => {
   const status = document.querySelector('#action-status');
   if (offerModal.contains(status)) document.querySelector('main').prepend(status);
 });
+function updateAlertSection(section, count) {
+  section.querySelector('[data-alert-count]').textContent = count;
+  let empty = section.querySelector('[data-alert-empty]');
+  if (count === 0 && !empty) {
+    empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.dataset.alertEmpty = '';
+    empty.textContent = section.dataset.alertSection === 'unread' ? 'Nenhum alerta não lido.' : 'Nenhum alerta lido.';
+    section.querySelector('h2').after(empty);
+  } else if (count > 0) empty?.remove();
+}
 
 async function handleOfferCardSubmit(event) {
   const form = event.target;
@@ -250,6 +310,13 @@ async function handleOfferCardSubmit(event) {
       overlay.hidden = true;
       overlay.querySelector('strong').textContent = '';
       if (globalUndo?.dataset.card === `#${CSS.escape(card.id)}`) hideGlobalUndo();
+      if (form.action.includes('/seen/undo') && document.querySelector('#feed[data-alerts="true"]')) {
+        const unread = document.querySelector('[data-alert-section="unread"]');
+        const read = document.querySelector('[data-alert-section="read"]');
+        unread.querySelector('[data-alert-grid]').prepend(card);
+        updateAlertSection(unread, Number(unread.querySelector('[data-alert-count]').textContent) + 1);
+        updateAlertSection(read, Math.max(0, Number(read.querySelector('[data-alert-count]').textContent) - 1));
+      }
       card.querySelector('.offer-open')?.focus({preventScroll: true});
     } else {
       const undoForm = overlay.querySelector('[data-card-undo]');
@@ -259,7 +326,13 @@ async function handleOfferCardSubmit(event) {
       card.classList.add('offer-card-actioned');
       overlay.querySelector('strong').textContent = action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.';
       overlay.hidden = false;
-      card.parentElement.append(card);
+      if (action === 'seen' && document.querySelector('#feed[data-alerts="true"]')) {
+        const unread = document.querySelector('[data-alert-section="unread"]');
+        const read = document.querySelector('[data-alert-section="read"]');
+        read.querySelector('[data-alert-grid]').append(card);
+        updateAlertSection(unread, Math.max(0, Number(unread.querySelector('[data-alert-count]').textContent) - 1));
+        updateAlertSection(read, Number(read.querySelector('[data-alert-count]').textContent) + 1);
+      }
       if (sequence > globalUndoSequence) {
         globalUndoSequence = sequence;
         showGlobalUndo(card, action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.');

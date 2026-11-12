@@ -29,5 +29,6 @@
 <div class="offer-expanded">
 <div class="message-content {{ 'album' if offer.parts|length > 1 else '' }}">{% for part in offer.parts %}{% include 'message.html' %}{% endfor %}</div>
 <div class="actions">{% if offer.url %}<a href="{{ offer.url }}" target="_blank" rel="noopener noreferrer">Abrir no Telegram ↗</a>{% endif %}</div>
+{% if not deleted_view %}<form method="post" action="/offers/{{ offer.id }}/extract" data-reextract><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="secondary">Reextrair com IA</button><span role="status" aria-live="polite" data-extraction-status></span></form>{% endif %}
 {% if offer.extraction %}<section class="ai-extraction-data" aria-labelledby="ai-extraction-{{ offer.id }}"><h3 id="ai-extraction-{{ offer.id }}">Dados retornados pela IA</h3><pre><code>{{ offer.extraction_data|tojson(indent=2) }}</code></pre></section>{% endif %}
 </div></details><button type="button" class="offer-open" hidden>Abrir oferta</button></article>

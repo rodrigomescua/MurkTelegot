@@ -14,6 +14,7 @@
             <span class="coupon-status">{{ 'Inativo' if coupon.status == 'inactive' else 'Ativo' }}</span>
           </div>
           <p class="coupon-conditions"><strong>Condições:</strong> {{ coupon.conditions or 'Não informadas' }}</p>
+          {% if coupon.links %}<p class="coupon-links">{% for link in coupon.links %}{% if link.type in ['redeem', 'products'] and link.url is string and (link.url.startswith('https://') or link.url.startswith('http://')) %}<a href="{{ link.url }}" target="_blank" rel="noopener">{{ 'Resgatar cupom' if link.type == 'redeem' else 'Ver produtos' }}</a>{% if not loop.last %} · {% endif %}{% endif %}{% endfor %}</p>{% endif %}
           {% if not coupon.inactive_at %}
           <form method="post" action="/coupons/{{ coupon.id }}/inactive">
             <input type="hidden" name="csrf" value="{{ csrf }}">

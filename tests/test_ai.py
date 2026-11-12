@@ -66,7 +66,9 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
             'product_present': False, 'product_name': None, 'original_price': None,
             'discounted_price': None, 'coupon_code': None,
             'coupons': [
-                {'store': ' Loja X ', 'code': ' SAVE ', 'conditions': 'Mínimo R$ 100', 'status': 'active'},
+                {'store': ' Loja X ', 'code': ' SAVE ', 'conditions': 'Mínimo R$ 100', 'status': 'active',
+                 'links': [{'type': 'redeem', 'url': 'https://loja.example/resgatar'},
+                           {'type': 'products', 'url': 'javascript:alert(1)'}]},
                 {'store': None, 'code': 'OTHER', 'conditions': None, 'status': 'inactive'},
             ],
         })}}]}
@@ -74,6 +76,7 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
             result = await extract('openai', 'key', 'model', 'Cupom SAVE')
         self.assertEqual(result['coupons'], [{
             'store': 'Loja X', 'code': 'SAVE', 'conditions': 'Mínimo R$ 100', 'status': 'active',
+            'links': [{'type': 'redeem', 'url': 'https://loja.example/resgatar'}],
         }])
         self.assertEqual(result['coupon_code'], 'SAVE')
 
@@ -101,6 +104,19 @@ class AIStoreTests(unittest.TestCase):
         self.store.save_ai_settings('secret-openai', 'secret-router', [
             {'provider': 'openai', 'id': 'a'}, {'provider': 'openrouter', 'id': 'b'},
         ])
+
+    def test_ai_queue_queries_use_the_added_indexes(self):
+        checks = {
+            "SELECT id FROM ai_jobs WHERE status='queued' ORDER BY queue_at,id LIMIT 1": 'ai_jobs_queue',
+            "SELECT id FROM ai_job_items WHERE job_id=1 AND status='queued' ORDER BY position LIMIT 1":
+                'ai_items_claim',
+            "SELECT DISTINCT offer_id FROM ai_job_items WHERE offer_id IN (1) AND status IN ('queued','processing')":
+                'ai_items_pending',
+        }
+        for sql, index in checks.items():
+            with self.subTest(index=index):
+                plan = ' '.join(row['detail'] for row in self.store.rows('EXPLAIN QUERY PLAN ' + sql))
+                self.assertIn(index, plan)
 
     def test_prompt_extra_is_saved_and_returned_with_ai_settings(self):
         self.store.save_ai_settings('', '', [], '  Priorize condições de parcelamento.  ')
@@ -130,6 +146,8 @@ class AIStoreTests(unittest.TestCase):
         self.assertEqual(card['extraction_data'], result)
         self.assertEqual(json.loads(self.store.rows('SELECT result_json FROM offer_extractions')[0]['result_json']),
                          result)
+        self.assertEqual(self.store.ai_offer_extraction_status(1),
+                         {'status': 'succeeded', 'extraction': result})
 
     def test_model_metrics_persist_by_model_and_failure_type_after_job_cleanup(self):
         self.store.ingest(-1001, 1, 'Oferta', '2026-11-01', None)
@@ -261,6 +279,26 @@ class AIStoreTests(unittest.TestCase):
         self.assertEqual(migrated.rows('SELECT body FROM offers'), [{'body': 'Oferta preservada'}])
         tables = {row['name'] for row in migrated.rows("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertTrue({'offer_extractions', 'coupons', 'ai_jobs', 'ai_job_items', 'ai_job_attempts'} <= tables)
+
+    def test_coupon_links_migration_preserves_rows_and_creates_backup(self):
+        path = Path(self.tmp.name) / 'legacy-coupons.db'
+        with sqlite3.connect(path) as db:
+            db.execute('''CREATE TABLE coupons (
+                id INTEGER PRIMARY KEY, store TEXT NOT NULL, store_key TEXT NOT NULL,
+                code TEXT NOT NULL, code_key TEXT NOT NULL, conditions TEXT,
+                status TEXT NOT NULL, inactive_at TEXT, updated_at TEXT NOT NULL,
+                UNIQUE(store_key,code_key))''')
+            db.execute("INSERT INTO coupons VALUES(1,'Loja','loja','SAVE','save',NULL,'active',NULL,'now')")
+        migrated = Store(path)
+        self.assertEqual(migrated.rows('SELECT code,links_json FROM coupons'),
+                         [{'code': 'SAVE', 'links_json': '[]'}])
+        backup = sqlite3.connect(str(path) + '.before-coupon-links.db')
+        try:
+            columns = {row[1] for row in backup.execute('PRAGMA table_info(coupons)')}
+            self.assertNotIn('links_json', columns)
+            self.assertEqual(backup.execute('SELECT code FROM coupons').fetchone(), ('SAVE',))
+        finally:
+            backup.close()
 
     def test_legacy_extractions_add_result_json_and_preserve_backup(self):
         path = Path(self.tmp.name) / 'legacy-extractions.db'
@@ -408,17 +446,29 @@ class AIStoreTests(unittest.TestCase):
         self.store.claim_ai_job()
         item = self.store.claim_ai_item(job_id)
         content = self.store.ai_item_content(item)
-        result = self.store.finish_ai_item(item['id'], 'succeeded', {
+        extraction = {
             'product_present': False, 'product_name': None, 'original_price': None,
             'discounted_price': None, 'coupon_code': 'SAVE',
             'coupons': [{'store': 'Loja X', 'code': 'SAVE', 'conditions': 'Mínimo R$ 100',
-                         'status': 'active'}],
-        }, content['content_hash'])
+                         'status': 'active', 'links': [
+                             {'type': 'redeem', 'url': 'https://loja.example/resgatar'},
+                             {'type': 'products', 'url': 'https://loja.example/validos'},
+                         ]}],
+        }
+        result = self.store.finish_ai_item(item['id'], 'succeeded', extraction, content['content_hash'])
         self.assertEqual(result, 'succeeded')
         self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 0}])
         coupon = self.store.coupons_by_store()[0]['coupons'][0]
         self.assertEqual((coupon['store'], coupon['code'], coupon['conditions'], coupon['status']),
                          ('Loja X', 'SAVE', 'Mínimo R$ 100', 'active'))
+        self.assertEqual(coupon['links'], [
+            {'type': 'redeem', 'url': 'https://loja.example/resgatar'},
+            {'type': 'products', 'url': 'https://loja.example/validos'},
+        ])
+        self.assertIsNone(self.store.ai_offer_extraction_status(1)['extraction'])
+        self.assertEqual(self.store.ai_offer_extraction_status(1)['status'], 'succeeded')
+        self.assertIsNone(self.store.rows('SELECT result_json FROM ai_job_items')[0]['result_json'])
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offer_extractions'), [{'n': 0}])
         self.assertEqual(self.store.mark_coupon_inactive(coupon['id']), 1)
         first_inactive_at = self.store.rows('SELECT inactive_at FROM coupons')[0]['inactive_at']
         self.store.mark_coupon_inactive(coupon['id'])
@@ -454,20 +504,31 @@ class AIStoreTests(unittest.TestCase):
         self.assertEqual((current[0]['status'], current[0]['conditions'], current[0]['inactive_at']),
                          ('inactive', 'Mínimo R$ 50', first['inactive_at']))
 
-    def test_productless_ad_without_identifiable_coupon_keeps_offer(self):
+    def test_productless_ad_without_identifiable_coupon_is_logically_deleted(self):
         self.store.ingest(-1001, 1, 'Cupom sem loja ou código', '2026-11-01', None)
         self.save_models()
         job_id, _ = self.store.enqueue_ai_job(True)
         self.store.claim_ai_job()
         item = self.store.claim_ai_item(job_id)
         content = self.store.ai_item_content(item)
-        result = self.store.finish_ai_item(item['id'], 'succeeded', {
+        extraction = {
             'product_present': False, 'product_name': None, 'original_price': None,
             'discounted_price': None, 'coupon_code': None, 'coupons': [],
-        }, content['content_hash'])
+        }
+        result = self.store.finish_ai_item(item['id'], 'succeeded', extraction, content['content_hash'])
         self.assertEqual(result, 'succeeded')
-        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 1}])
-        self.assertEqual(self.store.feed()[0]['extraction_data']['product_present'], False)
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers WHERE deleted_at IS NULL'), [{'n': 0}])
+        self.assertEqual(self.store.feed(), [])
+        deleted = self.store.feed(deleted=True)
+        self.assertEqual(len(deleted), 1)
+        self.assertEqual(deleted[0]['extraction_data']['product_present'], False)
+        self.assertEqual(self.store.ai_offer_extraction_status(1)['status'], 'succeeded')
+        self.assertEqual(self.store.ai_offer_extraction_status(1)['extraction'], extraction)
+        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=1', ('2026-11-01T00:00:00+00:00',))
+        self.store.expire_offers(now=datetime(2026, 11, 2))
+        self.assertEqual(self.store.ai_offer_extraction_status(1), {'status': 'succeeded', 'extraction': None})
+        self.assertIsNone(self.store.rows('SELECT result_json FROM ai_job_items')[0]['result_json'])
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offer_extractions'), [{'n': 0}])
 
     def test_legacy_description_is_ignored_without_destroying_existing_schema(self):
         self.store.ingest(-1001, 1, 'Oferta original', '2026-11-01', None)

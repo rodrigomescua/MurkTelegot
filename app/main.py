@@ -566,6 +566,30 @@ async def enqueue_ai_job(replace_existing: bool = Form(False)):
                             status_code=303)
 
 
+@app.post('/offers/{offer_id}/extract', dependencies=[Depends(authenticate), Depends(csrf)])
+async def reextract_offer(request: Request, offer_id: int):
+    try:
+        job_id, count = store.enqueue_ai_job(True, offer_ids=[offer_id])
+    except ValueError as exc:
+        if 'application/json' in request.headers.get('accept', ''):
+            return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
+        return RedirectResponse('/?' + urlencode({'notice': str(exc)}), status_code=303)
+    if count != 1:
+        raise HTTPException(404, 'Oferta não encontrada.')
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': True, 'job_id': job_id, 'status': 'queued'},
+                            headers={'Cache-Control': 'no-store'})
+    return RedirectResponse('/?' + urlencode({'notice': 'Extração iniciada.'}), status_code=303)
+
+
+@app.get('/offers/{offer_id}/extraction-status', dependencies=[Depends(authenticate)])
+def offer_extraction_status(offer_id: int):
+    state = store.ai_offer_extraction_status(offer_id)
+    if state is None:
+        raise HTTPException(404, 'Oferta não encontrada.')
+    return JSONResponse(state, headers={'Cache-Control': 'no-store'})
+
+
 @app.post('/settings/frequent-terms', dependencies=[Depends(authenticate), Depends(csrf)])
 async def save_frequent_terms_settings(min_chars: int = Form(...)):
     try:

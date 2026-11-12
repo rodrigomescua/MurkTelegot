@@ -219,12 +219,19 @@ class WebTests(unittest.TestCase):
 
     def test_coupons_page_and_manual_inactivation_require_auth_and_csrf(self):
         main.store.execute('''INSERT INTO coupons
-            (store,store_key,code,code_key,conditions,status,inactive_at,updated_at)
-            VALUES(?,?,?,?,?,'active',NULL,'now')''', ('Loja X', 'loja x', 'SAVE', 'save', 'Mínimo R$ 100'))
+            (store,store_key,code,code_key,conditions,status,links_json,inactive_at,updated_at)
+            VALUES(?,?,?,?,?,'active',?,NULL,'now')''',
+            ('Loja X', 'loja x', 'SAVE', 'save', 'Mínimo R$ 100', json.dumps([
+                {'type': 'redeem', 'url': 'https://loja.example/resgatar'},
+                {'type': 'products', 'url': 'javascript:alert(1)'},
+            ])))
         page = self.client.get('/coupons', cookies=self.auth)
         self.assertEqual(page.status_code, 200)
         self.assertIn('Loja X', page.text)
         self.assertIn('Mínimo R$ 100', page.text)
+        self.assertIn('Resgatar cupom', page.text)
+        self.assertIn('https://loja.example/resgatar', page.text)
+        self.assertNotIn('javascript:', page.text)
         self.assertEqual(self.client.get('/coupons', follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.post('/coupons/1/inactive', cookies=self.auth,
                                           data={'csrf': 'invalid'}).status_code, 403)
@@ -373,6 +380,42 @@ class WebTests(unittest.TestCase):
             self.assertIn('Oferta original: relógio R$ 200', page.text)
             self.assertIn('Dados retornados pela IA', page.text)
             self.assertIn(r'M\u00ednimo R$ 100', page.text)
+
+    def test_manual_reextraction_requires_auth_csrf_and_returns_result_after_completion(self):
+        main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
+        offer_id = main.store.ingest(-100123, 1, 'Oferta original', '2026-11-05T12:00:00+00:00', None)
+        main.store.save_ai_settings('key-openai', '', [{'provider': 'openai', 'id': 'model'}])
+        self.assertEqual(self.client.post(f'/offers/{offer_id}/extract', data={
+            'csrf': main.csrf_token,
+        }, follow_redirects=False).status_code, 303)
+        self.assertEqual(self.client.post(f'/offers/{offer_id}/extract', cookies=self.auth,
+            headers={'Accept': 'application/json'}, data={'csrf': 'invalid'}).status_code, 403)
+        response = self.client.post(f'/offers/{offer_id}/extract', cookies=self.auth,
+                                    headers={'Accept': 'application/json'},
+                                    data={'csrf': main.csrf_token})
+        self.assertEqual(response.json()['status'], 'queued')
+        job = main.store.claim_ai_job()
+        extraction = {'product_present': True, 'product_name': 'Produto atualizado',
+                      'original_price': None, 'discounted_price': None,
+                      'coupon_code': None, 'coupons': []}
+        with patch.object(main, 'extract_ai', return_value=extraction):
+            asyncio.run(main.process_ai_job(job))
+        status = self.client.get(f'/offers/{offer_id}/extraction-status', cookies=self.auth)
+        self.assertEqual(status.json(), {'status': 'succeeded', 'extraction': extraction})
+        self.assertEqual(status.headers['Cache-Control'], 'no-store')
+        replacement = {'product_present': False, 'product_name': None, 'original_price': None,
+                       'discounted_price': None, 'coupon_code': 'SAVE', 'coupons': [
+                           {'store': 'Loja X', 'code': 'SAVE', 'conditions': None, 'status': 'active', 'links': []},
+                       ]}
+        response = self.client.post(f'/offers/{offer_id}/extract', cookies=self.auth,
+                                    headers={'Accept': 'application/json'},
+                                    data={'csrf': main.csrf_token})
+        self.assertTrue(response.json()['ok'])
+        with patch.object(main, 'extract_ai', return_value=replacement):
+            asyncio.run(main.process_ai_job(main.store.claim_ai_job()))
+        self.assertEqual(main.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 0}])
+        status = self.client.get(f'/offers/{offer_id}/extraction-status', cookies=self.auth)
+        self.assertEqual(status.json(), {'status': 'succeeded', 'extraction': None})
 
     def test_later_default_job_skips_extractions_completed_by_an_earlier_job(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
@@ -766,6 +809,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('Página 1 de 2', first.text)
         self.assertIn('Álbum parte um', first.text)
         self.assertIn('Álbum parte dois', first.text)
+        self.assertNotIn('data-reextract', first.text)
         self.assertIn('datetime="2026-11-08T11:30:00+00:00"', first.text)
         self.assertNotIn('Oferta manual da página dois', first.text)
         self.assertIn('Página 2 de 2', second.text)
@@ -997,8 +1041,8 @@ class WebTests(unittest.TestCase):
         main.store.mark_seen(second)
         page = self.client.get('/alerts', cookies=self.auth)
         self.assertEqual(page.status_code, 200)
-        self.assertIn('Não lidos · 1', page.text)
-        self.assertIn('Lidos · 1', page.text)
+        self.assertIn('Não lidos · <span data-alert-count>1</span>', page.text)
+        self.assertIn('Lidos · <span data-alert-count>1</span>', page.text)
         self.assertIn('Notebook PS5 Slim', page.text)
         self.assertIn('data-mark-seen', page.text)
         self.assertIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
@@ -1006,8 +1050,8 @@ class WebTests(unittest.TestCase):
         response = self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}, data={'csrf': main.csrf_token})
         self.assertTrue(response.json()['ok'])
         updated = self.client.get('/alerts', cookies=self.auth).text
-        self.assertIn('Não lidos · 0', updated)
-        self.assertIn('Lidos · 2', updated)
+        self.assertIn('Não lidos · <span data-alert-count>0</span>', updated)
+        self.assertIn('Lidos · <span data-alert-count>2</span>', updated)
         self.assertNotIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(main.store.unread(), 0)
         third = main.store.ingest(1, 3, 'Notebook fallback', '2026-11-04', None)
