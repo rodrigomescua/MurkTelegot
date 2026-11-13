@@ -44,7 +44,7 @@ Quando o usuário pedir para iniciar o app localmente para teste, use `.data/off
 
 ## Distribuição
 
-O workflow `.github/workflows/release.yml` testa pushes em `main`/`master` e pull requests. Uma release estável publicada dispara, após testes, a publicação GHCR para AMD64 (`linux/amd64`) com tags semânticas e `latest`. Push inicial não publica imagem. Não crie release nem altere visibilidade sem solicitação. Preserve o volume em atualizações; rollback restaura imagem e backup compatíveis.
+O workflow `.github/workflows/release.yml` testa pushes em `main`/`master` e pull requests. Uma release estável publicada dispara, após testes, a publicação GHCR para AMD64 (`linux/amd64`) com tags semânticas e `latest`. Push inicial não publica imagem. O usuário autorizou permanentemente que, ao concluir uma implementação e suas verificações, a próxima release estável seja publicada e o catálogo Runtipi atualizado sem nova confirmação. Faça commit/push, execute os testes e aguarde todos os checks obrigatórios; atualize o catálogo quando a tag exata existir no registry. Se a proteção exigir PR, abra e faça merge após todos os checks. Não contorne proteção. Essa autorização não inclui atualizar a instância Runtipi nem alterar visibilidade do repositório/pacote. Preserve o volume em atualizações; rollback restaura imagem e backup compatíveis.
 
 ## Documentação e decisões
 

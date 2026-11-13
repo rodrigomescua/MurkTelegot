@@ -466,9 +466,11 @@ async def coupons_page(request: Request, notice: str = ''):
 
 
 @app.post('/coupons/{coupon_id}/inactive', dependencies=[Depends(authenticate), Depends(csrf)])
-async def mark_coupon_inactive(coupon_id: int):
+async def mark_coupon_inactive(coupon_id: int, request: Request):
     changed = await asyncio.to_thread(store.mark_coupon_inactive, coupon_id)
     notice = 'Cupom marcado como inativo.' if changed else 'Cupom não encontrado.'
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': changed, 'message': notice}, status_code=200 if changed else 404)
     return RedirectResponse('/coupons?' + urlencode({'notice': notice}), status_code=303)
 
 

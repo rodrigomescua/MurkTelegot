@@ -243,3 +243,7 @@ Chromium em 390 px e 1365 px verificou reextração no modal, resultado atualiza
 Não houve chamadas reais a provedores nem benchmark de produção. Os índices foram mantidos porque os planos SQLite os escolhem para as consultas da fila; nenhum ganho de tempo foi medido.
 
 Release `v0.5.22`: commit `0086ccf`; CI do push `43284924671` e workflow da release `43285023041` passaram. GHCR confirmou `ghcr.io/rodrigomescua/murktelegot:0.5.22`, índice OCI `sha256:4c18d2e3d724d5511b23316b7f533445e8ae57820fc62be8a81aa5e9ea43deda`, incluindo `linux/amd64`. Catálogo atualizado pela PR [1497](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1497), merge `548d6dd`; `tipi_version` 52. Os checks `test` e `renovate` do PR passaram, `bun test` local teve 469 aprovados e o CI pós-merge `43285684446` passou. Nenhum servidor Uvicorn local estava ativo. A instância Runtipi não foi atualizada.
+
+## Inativação de cupons sem recarga — 2026-11-12
+
+Com quatro cupons sintéticos, Chromium em 1365 px e 390 px inativou dois cupons seguidos sem sair de `/coupons`; os quatro cards permaneceram no mesmo lugar, com dois estados atualizados e duas ações restantes. Em 390 px não houve overflow horizontal; nenhum erro JavaScript ocorreu. A suíte `unittest` completa passou com 184 testes; também passaram `compileall`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check`. O servidor local usou banco temporário sintético e foi encerrado; nenhum dado pessoal foi usado.

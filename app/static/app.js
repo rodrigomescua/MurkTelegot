@@ -53,6 +53,32 @@ document.addEventListener('submit', async (event) => {
     event.preventDefault();
     return;
   }
+  if (form.matches('[data-inactivate-coupon]')) {
+    event.preventDefault();
+    if (form.dataset.busy) return;
+    form.dataset.busy = 'true';
+    const button = event.submitter || form.querySelector('button');
+    button.disabled = true;
+    try {
+      const response = await fetch(form.action, {
+        method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin',
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível inativar o cupom.');
+      const status = form.closest('.coupon-card').querySelector('.coupon-status');
+      status.textContent = 'Inativo';
+      form.remove();
+      status.focus();
+      toast(result.message);
+    } catch (error) {
+      toast(error.message || 'Não foi possível confirmar a operação. Tente novamente.', true);
+      button.disabled = false;
+      delete form.dataset.busy;
+      return;
+    }
+    delete form.dataset.busy;
+    return;
+  }
   if (!form.matches('[data-telegram]')) return;
   event.preventDefault();
   const panel = document.querySelector('#telegram-panel');

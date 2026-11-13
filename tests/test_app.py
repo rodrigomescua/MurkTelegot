@@ -239,6 +239,19 @@ class WebTests(unittest.TestCase):
                                     data={'csrf': main.csrf_token}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(main.store.rows('SELECT status FROM coupons'), [{'status': 'inactive'}])
+        main.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,conditions,status,links_json,inactive_at,updated_at)
+            VALUES('Loja Y','loja y','SECOND','second',NULL,'active','[]',NULL,'now')''')
+        response = self.client.post('/coupons/2/inactive', cookies=self.auth,
+                                    data={'csrf': main.csrf_token},
+                                    headers={'Accept': 'application/json'}, follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'ok': True, 'message': 'Cupom marcado como inativo.'})
+        missing = self.client.post('/coupons/999/inactive', cookies=self.auth,
+                                   data={'csrf': main.csrf_token},
+                                   headers={'Accept': 'application/json'}, follow_redirects=False)
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.json(), {'ok': False, 'message': 'Cupom não encontrado.'})
 
     def test_compact_page_titles_and_navigation_order(self):
         home = self.client.get('/', cookies=self.auth).text
