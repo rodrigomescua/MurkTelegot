@@ -34,6 +34,33 @@ def ignored_pattern(words):
     return re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, words)) + r')(?![^\W_])') if words else None
 
 
+def _irrelevant_ignored_words(rows):
+    # Match ignored_matches' exact boundary rule without compiling one regex per pair.
+    texts = [normalize(row['normalized']) for row in rows]
+    patterns_by_length = {}
+    for index, row in enumerate(rows):
+        if row['normalized']:
+            patterns_by_length.setdefault(len(texts[index]), {}).setdefault(texts[index], []).append(index)
+    lengths = sorted(patterns_by_length)
+    irrelevant = []
+    for index, text in enumerate(texts):
+        covered = set()
+        for start in range(len(text) + 1):
+            if start and text[start - 1].isalnum():
+                continue
+            for length in lengths:
+                end = start + length
+                if end > len(text):
+                    break
+                if end < len(text) and text[end].isalnum():
+                    continue
+                covered.update(patterns_by_length[length].get(text[start:end], ()))
+        covered.discard(index)
+        if covered:
+            irrelevant.append({**dict(rows[index]), 'covered_by': [rows[i]['word'] for i in sorted(covered)]})
+    return irrelevant
+
+
 def term_phrases(text):
     tokens = list(re.finditer(r'[^\W_]+', text))
     for i, first in enumerate(tokens):
@@ -1214,13 +1241,7 @@ class Store:
         with self.connect() as db:
             rows = [dict(row) for row in db.execute(
                 'SELECT id,word,normalized FROM ignored_keywords ORDER BY normalized,id')]
-        irrelevant = []
-        for row in rows:
-            covered_by = [other['word'] for other in rows if other['id'] != row['id'] and
-                          ignored_matches(row['normalized'], other['normalized'])]
-            if covered_by:
-                irrelevant.append({**row, 'covered_by': covered_by})
-        return irrelevant
+        return _irrelevant_ignored_words(rows)
 
     def frequent_terms(self):
         # Count each phrase once per offer, including an album's separate messages.

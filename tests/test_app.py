@@ -806,10 +806,15 @@ class WebTests(unittest.TestCase):
         main.store.add_ignored('teste')
         main.store.add_ignored('filtro')
 
-        response = self.client.get('/ignored', cookies=self.auth)
+        with patch.object(main.store, 'irrelevant_ignored_words', wraps=main.store.irrelevant_ignored_words) as analyze:
+            response = self.client.get('/ignored', cookies=self.auth)
+            analyze.assert_not_called()
+            self.assertNotIn('Filtros irrelevantes (', response.text)
+            response = self.client.get('/ignored?analyze=true', cookies=self.auth)
+            analyze.assert_called_once()
 
-        self.assertIn('Filtros irrelevantes (1)', response.text)
         self.assertIn('id="irrelevant-dialog"', response.text)
+        self.assertIn('data-open="true"', response.text)
         self.assertIn('teste de filtro</strong> — já coberto por filtro, teste', response.text)
 
     def test_ignored_search_matches_accentless_and_keeps_search_literals(self):

@@ -22,3 +22,17 @@ A diferença indica o custo de examinar e ordenar toda a tabela antes do limite.
 Execute `PYTHONPATH=. .venv/bin/python docs/performance/benchmark_ignored_filter.py` para comparar o filtro anterior, que normalizava e verificava cada termo para cada mensagem, com a regex compilada uma vez por consulta. O script usa uma base temporária com 1.078 mensagens sintéticas, 308 termos ignorados e alguns álbuns; exige que IDs e ordem dos cards resultantes sejam iguais (até 100 mensagens antes do agrupamento). Faz cinco medições e reporta a mediana.
 
 Em 2026-11-05, no host local (Python 3.14, Linux x86_64, AMD Ryzen 7 5700X), a cópia isolada do backup com 1.078 ofertas e 308 termos passou de 1.815,2 ms para 15,4 ms na consulta do feed (99,2% menos, 118×). A rota Home completa passou de 1.845,7 ms para 38,7 ms no TestClient (97,9% menos, 47,7×); ambas retornaram 100 cards e cerca de 288 KB. Os dados privados não são incluídos no repositório. Resultados locais não preveem o tempo em produção.
+
+## Análise de filtros irrelevantes
+
+Execute `PYTHONPATH=. .venv/bin/python docs/performance/benchmark_ignored_redundancy.py`. O benchmark compara a implementação par-a-par anterior à busca por substrings válidas, exige resultados idênticos em 150 e 400 filtros sintéticos e mede o candidato em 4.281 filtros. O conjunto maior omite a referência par-a-par porque ela exige milhões de regex e excede o cache interno do módulo `re`.
+
+Em 2026-11-13, com Python 3.14.4 em Linux x86_64, três medições do algoritmo antigo e cinco do novo apresentaram:
+
+| Filtros sintéticos | Par-a-par | Substrings indexadas | Ganho |
+|---:|---:|---:|---:|
+| 150 | 79,559 ms | 0,487 ms | 163× |
+| 400 | 676,204 ms | 1,145 ms | 590× |
+| 4.281 | Não medido | 12,894 ms | — |
+
+Na cópia pessoal `.data/offers.db`, consultada em modo somente leitura, havia 4.281 filtros. O novo algoritmo levou mediana de 18,957 ms em nove execuções e encontrou 311 filtros redundantes, com 339 relações de cobertura. O método antigo faria 18.322.680 comparações nesse conjunto; não foi executado integralmente contra essa cópia. O banco, os termos e os resultados não são versionados. A equivalência foi verificada por testes diferenciais usando banco temporário e por comparação exata no benchmark sintético. Esses tempos locais não preveem latência da rota em produção.

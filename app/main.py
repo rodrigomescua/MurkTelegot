@@ -698,15 +698,16 @@ async def delete_rule(rule_id: int):
 
 
 @app.get('/ignored', dependencies=[Depends(authenticate)])
-async def ignored_page(request: Request, notice: str = '', q: str = '', page: int = 1):
+async def ignored_page(request: Request, notice: str = '', q: str = '', page: int = 1,
+                      analyze: bool = False):
     if len(q) > 100 or page < 1:
         raise HTTPException(400, 'Filtro inválido.')
     ignored_words, total, page, pages = store.ignored_words_page(q, page)
-    irrelevant_words = store.irrelevant_ignored_words()
+    irrelevant_words = store.irrelevant_ignored_words() if analyze else []
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
         'ignored_words': ignored_words, 'irrelevant_words': irrelevant_words,
-        'q': q, 'page': page, 'pages': pages, 'total': total,
+        'q': q, 'page': page, 'pages': pages, 'total': total, 'analyze': analyze,
     })
 
 

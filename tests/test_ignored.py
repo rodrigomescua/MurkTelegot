@@ -39,6 +39,29 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertTrue(ignored_matches('Console (PS5 PRO)!', 'ps5 pro'))
         self.assertFalse(matches('PS5_pro', 'PS5'))
 
+    def test_irrelevant_filters_match_pairwise_reference_for_unicode_boundaries(self):
+        terms = [
+            ('Casa', 'casa'), ('Casamento', 'casamento'),
+            ('foo', 'foo'), ('bar', 'bar'), ('foo_bar', 'foo_bar'),
+            ('Café shop', 'cafe shop'), ('cafe shopper', 'cafe shopper'),
+            ('ℌouse', 'House'), ('house', 'house'),
+            ('A--B', 'a--b'), ('a-b', 'a-b'),
+            # Direct SQL below covers a stored value rejected by the current add API.
+            ('Combining mark', '\u0301'),
+        ]
+        self.store.execute('INSERT INTO ignored_keywords(word,normalized) VALUES(?,?)', terms[0])
+        with self.store.connect() as db:
+            db.executemany('INSERT INTO ignored_keywords(word,normalized) VALUES(?,?)', terms[1:])
+        rows = self.store.rows('SELECT id,word,normalized FROM ignored_keywords ORDER BY normalized,id')
+        expected = []
+        for row in rows:
+            covered_by = [other['word'] for other in rows if other['id'] != row['id'] and
+                          ignored_matches(row['normalized'], other['normalized'])]
+            if covered_by:
+                expected.append({**row, 'covered_by': covered_by})
+
+        self.assertEqual(self.store.irrelevant_ignored_words(), expected)
+
     def test_ignore_applies_to_existing_and_new_offers_but_not_alerts(self):
         self.add_offer(1, 'Notebook e PS5 Slim!')
         self.assertEqual(self.store.unread(), 1)
