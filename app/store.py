@@ -45,6 +45,7 @@ def _irrelevant_ignored_words(rows):
     irrelevant = []
     for index, text in enumerate(texts):
         covered = set()
+        row_auto_delete = rows[index].get('auto_delete', 0)
         for start in range(len(text) + 1):
             if start and text[start - 1].isalnum():
                 continue
@@ -54,10 +55,12 @@ def _irrelevant_ignored_words(rows):
                     break
                 if end < len(text) and text[end].isalnum():
                     continue
-                covered.update(patterns_by_length[length].get(text[start:end], ()))
+                covered.update(i for i in patterns_by_length[length].get(text[start:end], ())
+                               if not row_auto_delete or rows[i].get('auto_delete', 0))
         covered.discard(index)
         if covered:
-            irrelevant.append({**dict(rows[index]), 'covered_by': [rows[i]['word'] for i in sorted(covered)]})
+            irrelevant.append({k: v for k, v in rows[index].items() if k != 'auto_delete'} |
+                              {'covered_by': [rows[i]['word'] for i in sorted(covered)]})
     return irrelevant
 
 
@@ -1215,13 +1218,27 @@ class Store:
     def remove_ignored(self, word_id):
         with self.connect() as db:
             db.execute('DELETE FROM ignored_keywords WHERE id=?', (word_id,))
-            self._register_ignored_filter(db)
-            db.execute('''UPDATE offers SET ignored_at=NULL,ignored_word=NULL
+            self._refresh_ignored_filter(db)
+
+    def _refresh_ignored_filter(self, db):
+        self._register_ignored_filter(db)
+        db.execute('''UPDATE offers SET ignored_at=NULL,ignored_word=NULL
                 WHERE (ignored_at IS NOT NULL OR ignored_word IS NOT NULL) AND NOT EXISTS (
                 SELECT 1 FROM offers m WHERE m.chat_id=offers.chat_id
                   AND ((offers.grouped_id IS NULL AND m.id=offers.id)
                     OR (offers.grouped_id IS NOT NULL AND m.grouped_id=offers.grouped_id))
                   AND ignored_offer(m.body))''')
+
+    def remove_irrelevant_ignored(self):
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            rows = [dict(row) for row in db.execute(
+                'SELECT id,word,normalized,auto_delete FROM ignored_keywords ORDER BY normalized,id')]
+            ids = [row['id'] for row in _irrelevant_ignored_words(rows)]
+            db.executemany('DELETE FROM ignored_keywords WHERE id=?', [(word_id,) for word_id in ids])
+            if ids:
+                self._refresh_ignored_filter(db)
+            return len(ids)
 
     def ignored_words_page(self, q='', page=1, page_size=25):
         q = normalize(q.strip())
@@ -1240,7 +1257,7 @@ class Store:
     def irrelevant_ignored_words(self):
         with self.connect() as db:
             rows = [dict(row) for row in db.execute(
-                'SELECT id,word,normalized FROM ignored_keywords ORDER BY normalized,id')]
+                'SELECT id,word,normalized,auto_delete FROM ignored_keywords ORDER BY normalized,id')]
         return _irrelevant_ignored_words(rows)
 
     def frequent_terms(self):

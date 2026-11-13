@@ -698,17 +698,30 @@ async def delete_rule(rule_id: int):
 
 
 @app.get('/ignored', dependencies=[Depends(authenticate)])
-async def ignored_page(request: Request, notice: str = '', q: str = '', page: int = 1,
-                      analyze: bool = False):
+async def ignored_page(request: Request, notice: str = '', q: str = '', page: int = 1):
     if len(q) > 100 or page < 1:
         raise HTTPException(400, 'Filtro inválido.')
     ignored_words, total, page, pages = store.ignored_words_page(q, page)
-    irrelevant_words = store.irrelevant_ignored_words() if analyze else []
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
-        'ignored_words': ignored_words, 'irrelevant_words': irrelevant_words,
-        'q': q, 'page': page, 'pages': pages, 'total': total, 'analyze': analyze,
+        'ignored_words': ignored_words,
+        'q': q, 'page': page, 'pages': pages, 'total': total,
     })
+
+
+@app.post('/ignored/remove-irrelevant', dependencies=[Depends(authenticate), Depends(csrf)])
+async def remove_irrelevant_ignored(request: Request, q: str = Form('', max_length=100),
+                                    page: int = Form(1)):
+    if page < 1:
+        raise HTTPException(400, 'Filtro inválido.')
+    count = store.remove_irrelevant_ignored()
+    message = (f'{count} filtros irrelevantes removidos.' if count > 1 else
+               '1 filtro irrelevante removido.' if count == 1 else
+               'Nenhum filtro irrelevante para remover.')
+    if 'application/json' in request.headers.get('accept', ''):
+        return JSONResponse({'ok': True, 'message': message, 'deleted': count})
+    from urllib.parse import urlencode
+    return RedirectResponse('/ignored?' + urlencode({'q': q, 'page': page, 'notice': message}), status_code=303)
 
 
 def ignored_redirect(message):

@@ -801,21 +801,39 @@ class WebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         self.assertIn('/ignored?q=produto&page=2', response.headers['location'])
 
-    def test_ignored_page_lists_irrelevant_filters_in_modal(self):
+    def test_ignored_page_only_removes_irrelevant_filters_when_button_is_submitted(self):
         main.store.add_ignored('teste de filtro')
         main.store.add_ignored('teste')
         main.store.add_ignored('filtro')
 
-        with patch.object(main.store, 'irrelevant_ignored_words', wraps=main.store.irrelevant_ignored_words) as analyze:
+        with patch.object(main.store, 'remove_irrelevant_ignored', wraps=main.store.remove_irrelevant_ignored) as remove:
             response = self.client.get('/ignored', cookies=self.auth)
-            analyze.assert_not_called()
-            self.assertNotIn('Filtros irrelevantes (', response.text)
-            response = self.client.get('/ignored?analyze=true', cookies=self.auth)
-            analyze.assert_called_once()
+            remove.assert_not_called()
+        self.assertIn('method="post" action="/ignored/remove-irrelevant"', response.text)
+        self.assertNotIn('irrelevant-dialog', response.text)
 
-        self.assertIn('id="irrelevant-dialog"', response.text)
-        self.assertIn('data-open="true"', response.text)
-        self.assertIn('teste de filtro</strong> — já coberto por filtro, teste', response.text)
+    def test_remove_irrelevant_filters_requires_auth_and_csrf(self):
+        self.assertEqual(self.client.post('/ignored/remove-irrelevant', follow_redirects=False).status_code, 303)
+        denied = self.client.post('/ignored/remove-irrelevant', cookies=self.auth, data={'csrf': 'bad'})
+        self.assertEqual(denied.status_code, 403)
+        main.store.add_ignored('teste maior')
+        main.store.add_ignored('teste')
+        response = self.client.post('/ignored/remove-irrelevant', cookies=self.auth,
+                                    data={'csrf': main.csrf_token, 'q': 'teste', 'page': '2'},
+                                    follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIn('/ignored?q=teste&page=2', response.headers['location'])
+        self.assertIn('1+filtro+irrelevante+removido', response.headers['location'])
+        self.assertIn('1 filtro irrelevante removido',
+                      __import__('urllib.parse').parse.unquote_plus(response.headers['location']))
+
+        main.store.add_ignored('filtro maior')
+        main.store.add_ignored('filtro')
+        response = self.client.post('/ignored/remove-irrelevant', cookies=self.auth,
+                                    headers={'accept': 'application/json'},
+                                    data={'csrf': main.csrf_token})
+        self.assertEqual(response.json(), {'ok': True, 'message': '1 filtro irrelevante removido.', 'deleted': 1})
+        self.assertIn('Remover filtros irrelevantes', self.client.get('/ignored', cookies=self.auth).text)
 
     def test_ignored_search_matches_accentless_and_keeps_search_literals(self):
         main.store.add_ignored('Café especial')

@@ -52,15 +52,49 @@ class IgnoredWordsTests(unittest.TestCase):
         self.store.execute('INSERT INTO ignored_keywords(word,normalized) VALUES(?,?)', terms[0])
         with self.store.connect() as db:
             db.executemany('INSERT INTO ignored_keywords(word,normalized) VALUES(?,?)', terms[1:])
-        rows = self.store.rows('SELECT id,word,normalized FROM ignored_keywords ORDER BY normalized,id')
+        rows = self.store.rows('SELECT id,word,normalized,auto_delete FROM ignored_keywords ORDER BY normalized,id')
         expected = []
         for row in rows:
             covered_by = [other['word'] for other in rows if other['id'] != row['id'] and
+                          (not row['auto_delete'] or other['auto_delete']) and
                           ignored_matches(row['normalized'], other['normalized'])]
             if covered_by:
-                expected.append({**row, 'covered_by': covered_by})
+                expected.append({k: v for k, v in row.items() if k != 'auto_delete'} |
+                                {'covered_by': covered_by})
 
         self.assertEqual(self.store.irrelevant_ignored_words(), expected)
+
+    def test_remove_irrelevant_refreshes_offers_without_deleting_them(self):
+        self.add_offer(1, 'Oferta teste de filtro')
+        self.store.add_ignored('teste de filtro')
+        self.store.add_ignored('teste')
+        self.store.add_ignored('filtro')
+        self.store.add_ignored('outro teste')
+        before = self.store.rows('SELECT id,body,ignored_at,ignored_word FROM offers')
+        self.assertEqual(self.store.remove_irrelevant_ignored(), 2)
+        self.assertEqual({r['word'] for r in self.store.rows('SELECT word FROM ignored_keywords')},
+                         {'filtro', 'teste'})
+        after = self.store.rows('SELECT id,body,ignored_at,ignored_word FROM offers')
+        self.assertEqual(after[0]['id'], before[0]['id'])
+        self.assertEqual(after[0]['body'], before[0]['body'])
+        self.assertEqual(bool(after[0]['ignored_at']), bool(before[0]['ignored_at']))
+
+    def test_auto_delete_filter_requires_auto_delete_cover(self):
+        self.store.add_ignored('teste de filtro', auto_delete=True)
+        self.store.add_ignored('teste')
+        self.store.add_ignored('filtro')
+
+        self.assertEqual(self.store.remove_irrelevant_ignored(), 0)
+        self.assertEqual({r['word'] for r in self.store.rows('SELECT word FROM ignored_keywords')},
+                         {'filtro', 'teste', 'teste de filtro'})
+
+    def test_auto_delete_cover_can_remove_a_less_destructive_filter(self):
+        self.store.add_ignored('teste', auto_delete=True)
+        self.store.add_ignored('teste maior')
+
+        self.assertEqual(self.store.remove_irrelevant_ignored(), 1)
+        self.assertEqual(self.store.rows('SELECT word,auto_delete FROM ignored_keywords'),
+                         [{'word': 'teste', 'auto_delete': 1}])
 
     def test_ignore_applies_to_existing_and_new_offers_but_not_alerts(self):
         self.add_offer(1, 'Notebook e PS5 Slim!')
