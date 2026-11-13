@@ -130,6 +130,7 @@ class Store:
                     position INTEGER NOT NULL, offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
                     message_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
                     stage TEXT NOT NULL DEFAULT '', stage_updated_at TEXT, result_json TEXT,
+                    show_result INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(job_id, position));
                 CREATE TABLE IF NOT EXISTS ai_job_attempts (
                     id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL REFERENCES ai_jobs(id) ON DELETE CASCADE,
@@ -195,6 +196,20 @@ class Store:
                 db.execute('ALTER TABLE ai_job_items ADD COLUMN stage_updated_at TEXT')
             if 'result_json' not in item_columns:
                 db.execute('ALTER TABLE ai_job_items ADD COLUMN result_json TEXT')
+            if 'show_result' not in item_columns:
+                backup = Path(str(path) + '.before-ai-item-visible-result.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                db.execute('ALTER TABLE ai_job_items ADD COLUMN show_result INTEGER NOT NULL DEFAULT 0')
             attempt_columns = {r['name'] for r in db.execute('PRAGMA table_info(ai_job_attempts)')}
             if 'failure_type' not in attempt_columns:
                 db.execute("ALTER TABLE ai_job_attempts ADD COLUMN failure_type TEXT NOT NULL DEFAULT ''")
@@ -513,7 +528,7 @@ class Store:
             db.execute('''INSERT INTO settings(key,value) VALUES('ai_prompt_extra',?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (prompt_extra.strip(),))
 
-    def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False):
+    def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False, show_result=False):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             settings = {row['key']: row['value'] for row in db.execute(
@@ -554,8 +569,9 @@ class Store:
             queue_at = datetime.now(timezone.utc).isoformat(timespec='microseconds')
             job_id = db.execute('''INSERT INTO ai_jobs(status,replace_existing,models_json,created_at,queue_at)
                 VALUES('queued',?,?,?,?)''', (int(bool(replace_existing)), json.dumps(models), created, queue_at)).lastrowid
-            db.executemany('''INSERT INTO ai_job_items(job_id,position,offer_id,chat_id,message_id)
-                VALUES(?,?,?,?,?)''', [(job_id, index, card['id'], card['chat_id'], card['message_id'])
+            db.executemany('''INSERT INTO ai_job_items(job_id,position,offer_id,chat_id,message_id,show_result)
+                VALUES(?,?,?,?,?,?)''', [(job_id, index, card['id'], card['chat_id'], card['message_id'],
+                                         int(show_result))
                                        for index, card in enumerate(cards)])
             return job_id, len(cards)
 
@@ -673,7 +689,7 @@ class Store:
     def ai_offer_extraction_status(self, offer_id):
         with self.connect() as db:
             offer = db.execute('SELECT 1 FROM offers WHERE id=? AND deleted_at IS NULL', (offer_id,)).fetchone()
-            item = db.execute('''SELECT i.status,i.result_json FROM ai_job_items i JOIN ai_jobs j ON j.id=i.job_id
+            item = db.execute('''SELECT i.id,i.status,i.result_json,i.show_result FROM ai_job_items i JOIN ai_jobs j ON j.id=i.job_id
                 WHERE i.offer_id=? ORDER BY i.id DESC LIMIT 1''', (offer_id,)).fetchone()
             if not offer and not item:
                 return None
@@ -692,6 +708,14 @@ class Store:
         status = item['status'] if item else ('succeeded' if extraction else 'idle')
         if status == 'skipped':
             status = 'succeeded' if extraction else 'idle'
+        if not offer and item and item['show_result'] and extraction:
+            with self.connect() as db:
+                db.execute('BEGIN IMMEDIATE')
+                consumed = db.execute('''UPDATE ai_job_items SET result_json=NULL,show_result=0
+                    WHERE id=? AND show_result=1 AND result_json=?''',
+                                      (item['id'], item['result_json'])).rowcount
+                if not consumed:
+                    extraction = None
         return {'status': status, 'extraction': extraction}
 
     def record_ai_attempt(self, job_id, item_id, provider, model, outcome, detail, duration_ms,
@@ -812,10 +836,11 @@ class Store:
                         db.executemany('UPDATE offers SET deleted_at=coalesce(deleted_at,?) WHERE id=?',
                                        [(deleted_at, offer_id) for offer_id in ids])
             result_json = json.dumps(extraction, ensure_ascii=False) if status == 'succeeded' and extraction else None
-            if not db.execute('SELECT 1 FROM offers WHERE id=?', (item['offer_id'],)).fetchone():
+            if not db.execute('SELECT 1 FROM offers WHERE id=?', (item['offer_id'],)).fetchone() and not item['show_result']:
                 result_json = None
-            db.execute('UPDATE ai_job_items SET status=?,result_json=? WHERE id=?',
-                       (status, result_json, item_id))
+            db.execute('''UPDATE ai_job_items SET status=?,result_json=?,
+                show_result=CASE WHEN ? IS NULL THEN 0 ELSE show_result END WHERE id=?''',
+                       (status, result_json, result_json, item_id))
             return status
 
     def ai_job_cancel_requested(self, job_id):

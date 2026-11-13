@@ -46,11 +46,25 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             page.locator('.offer-card').filter(has_text='Nintendo Switch em oferta').first.wait_for()
             page.goto(f'http://127.0.0.1:{port}/')
             card=page.locator('.offer-card').filter(has_text='Nintendo')
+            status_calls = [0]
+            def extraction_status(route):
+                status_calls[0] += 1
+                state = {'status': 'queued'} if status_calls[0] == 1 else {
+                    'status': 'succeeded', 'extraction': {'product_present': False, 'coupons': [{'store': 'Loja teste', 'code': 'SAVE'}]}}
+                route.fulfill(json=state)
+            page.route('**/offers/*/extraction-status', extraction_status)
+            page.route('**/offers/*/extract', lambda route: route.fulfill(json={'ok': True, 'job_id': 1, 'status': 'queued'}))
             card.locator('.offer-summary').tap()
             assert not page.locator('.offer-modal').evaluate('(el)=>el.open')
             assert not card.locator('.offer-detail').evaluate('(el)=>el.open')
             card.locator('.offer-open').tap()
             assert page.locator('.offer-modal').evaluate('(el)=>el.open')
+            page.locator('.offer-modal [data-reextract] button').tap()
+            extraction_data = page.locator('.offer-modal .ai-extraction-data pre code')
+            extraction_data.wait_for()
+            assert 'Loja teste' in extraction_data.inner_text()
+            page.unroute('**/offers/*/extraction-status')
+            page.unroute('**/offers/*/extract')
             page.evaluate('''() => { const a=document.createElement('a'); a.className='message-photo'; a.href='/original-image'; a.target='_blank'; a.innerHTML='<img alt="Foto">'; document.querySelector('.offer-modal .modal-content').prepend(a) }''')
             page.locator('.offer-modal .message-photo img').click()
             assert page.locator('.offer-modal').evaluate('(el)=>el.open')
@@ -81,6 +95,7 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             notebook=page.locator('.offer-card').filter(has_text='Notebook')
             notebook.locator('[data-delete-offer] button').tap()
             notebook.locator('.offer-action-overlay').wait_for(state='visible')
+            assert notebook.evaluate('(card) => card.parentElement.lastElementChild === card')
             notebook.locator('[data-card-undo] button').tap()
             notebook.locator('.offer-action-overlay').wait_for(state='hidden')
             assert notebook.locator('.offer-open').evaluate('(el)=>document.activeElement===el')

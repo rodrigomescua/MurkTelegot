@@ -428,7 +428,10 @@ class WebTests(unittest.TestCase):
             asyncio.run(main.process_ai_job(main.store.claim_ai_job()))
         self.assertEqual(main.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 0}])
         status = self.client.get(f'/offers/{offer_id}/extraction-status', cookies=self.auth)
-        self.assertEqual(status.json(), {'status': 'succeeded', 'extraction': None})
+        self.assertEqual(status.json(), {'status': 'succeeded', 'extraction': replacement})
+        self.assertIsNone(main.store.rows('SELECT result_json FROM ai_job_items ORDER BY id DESC LIMIT 1')[0]['result_json'])
+        self.assertEqual(self.client.get(f'/offers/{offer_id}/extraction-status', cookies=self.auth).json(),
+                         {'status': 'succeeded', 'extraction': None})
 
     def test_later_default_job_skips_extractions_completed_by_an_earlier_job(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))

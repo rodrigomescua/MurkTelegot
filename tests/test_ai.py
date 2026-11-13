@@ -359,6 +359,28 @@ class AIStoreTests(unittest.TestCase):
         finally:
             retry_backup.close()
 
+    def test_legacy_ai_items_add_visible_result_flag_after_backup(self):
+        path = Path(self.tmp.name) / 'legacy-ai-items.db'
+        with sqlite3.connect(path) as db:
+            db.executescript('''CREATE TABLE ai_jobs (
+                id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
+                models_json TEXT NOT NULL, created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT);
+                CREATE TABLE ai_job_items (
+                    id INTEGER PRIMARY KEY, job_id INTEGER NOT NULL, position INTEGER NOT NULL,
+                    offer_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued', stage TEXT NOT NULL DEFAULT '',
+                    stage_updated_at TEXT, result_json TEXT, UNIQUE(job_id, position));''')
+
+        migrated = Store(path)
+        columns = {row['name'] for row in migrated.rows('PRAGMA table_info(ai_job_items)')}
+        self.assertIn('show_result', columns)
+        backup = sqlite3.connect(str(path) + '.before-ai-item-visible-result.db')
+        try:
+            old_columns = {row[1] for row in backup.execute('PRAGMA table_info(ai_job_items)')}
+            self.assertNotIn('show_result', old_columns)
+        finally:
+            backup.close()
+
     def test_clear_all_jobs_are_removed_after_restart_recovery(self):
         self.store.ingest(-1001, 1, 'Oferta ativa', '2026-11-01', None)
         self.save_models()

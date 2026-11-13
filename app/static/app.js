@@ -275,6 +275,8 @@ function showOffer(detail, trigger) {
   offerModal.querySelector('.modal-content').append(detail.querySelector('.offer-expanded'));
   offerModal.showModal();
   offerModal.querySelector('.modal-close').focus();
+  const extractionForm = offerModal.querySelector('[data-reextract]');
+  if (extractionForm) pollExtraction(extractionForm);
 }
 offerModal.querySelector('.modal-close').addEventListener('click', () => offerModal.close());
 offerModal.addEventListener('click', (event) => {
@@ -359,6 +361,7 @@ async function handleOfferCardSubmit(event) {
         updateAlertSection(unread, Math.max(0, Number(unread.querySelector('[data-alert-count]').textContent) - 1));
         updateAlertSection(read, Number(read.querySelector('[data-alert-count]').textContent) + 1);
       }
+      if (action === 'delete' && card.parentElement.matches('.offer-grid')) card.parentElement.append(card);
       if (sequence > globalUndoSequence) {
         globalUndoSequence = sequence;
         showGlobalUndo(card, action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.');

@@ -571,7 +571,7 @@ async def enqueue_ai_job(replace_existing: bool = Form(False)):
 @app.post('/offers/{offer_id}/extract', dependencies=[Depends(authenticate), Depends(csrf)])
 async def reextract_offer(request: Request, offer_id: int):
     try:
-        job_id, count = store.enqueue_ai_job(True, offer_ids=[offer_id])
+        job_id, count = store.enqueue_ai_job(True, offer_ids=[offer_id], show_result=True)
     except ValueError as exc:
         if 'application/json' in request.headers.get('accept', ''):
             return JSONResponse({'ok': False, 'message': str(exc)}, status_code=400)
