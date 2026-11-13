@@ -346,6 +346,7 @@ class Store:
             db.execute('''DELETE FROM ignored_keywords
                           WHERE length(normalized) < 4 OR normalized NOT GLOB '*[^0-9]*' ''')
             db.execute('CREATE INDEX IF NOT EXISTS offers_album ON offers(chat_id, grouped_id, message_id)')
+            db.execute('CREATE INDEX IF NOT EXISTS hits_rule_offer ON hits(rule_id, offer_id)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_recent ON offers(date DESC, id DESC)')
             db.execute('CREATE INDEX IF NOT EXISTS offers_deleted ON offers(deleted_at) WHERE deleted_at IS NOT NULL')
             db.execute('CREATE INDEX IF NOT EXISTS coupons_inactive ON coupons(inactive_at) WHERE inactive_at IS NOT NULL')
@@ -1156,10 +1157,38 @@ class Store:
             db.execute('BEGIN IMMEDIATE')
             if not db.execute('SELECT 1 FROM rules WHERE id=?', (rule_id,)).fetchone():
                 return False
+            candidates = db.execute('''SELECT o.id,o.chat_id,o.grouped_id,o.body FROM offers o
+                JOIN hits h ON h.offer_id=o.id WHERE h.rule_id=?''', (rule_id,)).fetchall()
             db.execute('DELETE FROM hits WHERE rule_id=?', (rule_id,))
             db.execute('DELETE FROM rules WHERE id=?', (rule_id,))
-            for row in db.execute('SELECT normalized FROM ignored_keywords WHERE auto_delete=1').fetchall():
-                self._permanently_delete_ignored_matches(db, row['normalized'])
+            candidate_groups = {}
+            candidate_bodies = {}
+            for row in candidates:
+                candidate_bodies[row['id']] = row['body']
+                key = ('album', row['chat_id'], row['grouped_id']) if row['grouped_id'] is not None else ('offer', row['id'])
+                candidate_groups.setdefault(key, row['id'])
+            candidate_parts = []
+            for key, offer_id in candidate_groups.items():
+                kind, *group = key
+                chat_id, grouped_id = group if kind == 'album' else (None, None)
+                if self._alert_protects_offer(db, offer_id, chat_id, grouped_id):
+                    continue
+                if grouped_id is None:
+                    parts = [{'id': offer_id, 'body': candidate_bodies[offer_id]}]
+                else:
+                    parts = db.execute('SELECT id,body FROM offers WHERE chat_id=? AND grouped_id=?',
+                                       (chat_id, grouped_id)).fetchall()
+                candidate_parts.append(parts)
+            if not candidate_parts:
+                return True
+            auto_delete_words = [row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords WHERE auto_delete=1').fetchall()]
+            auto_delete_pattern = ignored_pattern(auto_delete_words)
+            delete_ids = {part['id'] for parts in candidate_parts
+                          if auto_delete_pattern and any(
+                              auto_delete_pattern.search(normalize(part['body'] or '')) for part in parts)
+                          for part in parts}
+            self._permanently_delete_offers(db, delete_ids)
             return True
 
     def auto_delete_album(self, chat_id, grouped_id, bodies):

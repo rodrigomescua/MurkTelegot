@@ -38,3 +38,7 @@ Em 2026-11-13, com Python 3.14.4 em Linux x86_64, três medições do algoritmo 
 | 4.281 | Não medido | 15,503 ms | — |
 
 Na cópia pessoal `.data/offers.db`, consultada em modo somente leitura, havia 4.281 filtros. O algoritmo final levou mediana de 24,597 ms em nove execuções e encontrou 303 filtros redundantes, com 328 relações de cobertura; autoexclusão incompatível foi mantida. O método antigo faria 18.322.680 comparações nesse conjunto; não foi executado integralmente contra essa cópia. O banco, os termos e os resultados não são versionados. A equivalência foi verificada por testes diferenciais usando banco temporário e por comparação exata no benchmark sintético. Esses tempos locais não preveem latência da rota em produção.
+
+## Exclusão de regra de alerta
+
+A causa medida na cópia `.data` e as limitações estão em [delete_alert_rule.md](delete_alert_rule.md). A investigação foi somente leitura e não mediu a requisição HTTP completa.

@@ -281,3 +281,11 @@ O botão da tela agora remove as regras redundantes em lote, com POST autenticad
 193 testes `unittest` passaram; `compileall`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check` passaram. Chromium com banco temporário confirmou que abrir a tela não remove filtros, que o clique remove a redundância e atualiza a tabela sem recarga, em 1365 px e 390 px, sem overflow. Os testes usam somente dados temporários.
 
 Release `v0.5.28`, commit `7d63901`; workflows de push `43464640683` e release `43464777186` passaram. GHCR confirmou `0.5.28` para AMD64, digest `sha256:e1a6c2f25e14ae63a3d75d7e5edd59af22f2567fd5612a21c53588cbc8511d60`. Catálogo atualizado pela PR [1506](https://github.com/rodrigomescua/runtipi-custom-appstore/pull/1506), merge `4822c49`; `tipi_version` 58. Checks `test`/`renovate`, 469 testes `bun test` e CI pós-merge `43465391140` passaram. A instância Runtipi não foi atualizada.
+
+## Otimização da exclusão de regras de alerta — 2026-11-13
+
+A suíte completa passou com 198 testes em Python 3.14.4. Também passaram os testes focados `tests.test_ignored`, `py_compile app/store.py`, `node --check app/static/app.js`, `bash -n run-dev.sh` e `git diff --check`. A regressão cobre oferta simples, álbum com termos autoexclusivos distintos em partes diferentes, preservação de álbum com outro hit, ausência de candidatos e criação/uso do índice `hits_rule_offer` em banco existente.
+
+Na cópia `.data/offers.db` aberta somente para leitura, a comparação do cálculo antigo e do novo produziu o mesmo conjunto final para apagar. Em uma regra existente com mais hits, 7,649 s e 3.843 scans completos de `offers` caíram para 47,692 ms, 2 candidatos e 2 grupos (160×). Nesse caso os dois cálculos resultaram em zero ofertas a apagar. É uma simulação isolada do cálculo, sem executar `DELETE` e sem medir a requisição HTTP; o banco não foi modificado. Ver [medição e método](performance/delete_alert_rule.md).
+
+A revisão independente não encontrou bloqueios. A medição é local e não comprova o tempo da instância Runtipi.

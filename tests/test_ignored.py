@@ -233,6 +233,43 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
         self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
 
+    def test_removing_rule_applies_different_auto_delete_terms_across_album_parts(self):
+        self.store.add_ignored('PS5 Slim', auto_delete=True)
+        self.store.add_ignored('Xbox Series', auto_delete=True)
+        self.add_offer(1, 'Notebook em oferta', grouped=55)
+        self.add_offer(2, 'Xbox Series incluso', grouped=55)
+        self.add_offer(3, 'PS5 Slim incluso', grouped=55)
+
+        self.assertTrue(self.store.remove_rule(1))
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+
+    def test_removing_last_alert_rule_applies_auto_delete_to_matching_single(self):
+        self.store.add_ignored('PS5 Slim', auto_delete=True)
+        self.add_offer(1, 'Notebook com PS5 Slim')
+
+        self.assertTrue(self.store.remove_rule(1))
+        self.assertEqual(self.store.rows('SELECT * FROM offers'), [])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
+
+    def test_removing_rule_keeps_album_protected_by_hit_on_another_part(self):
+        self.store.add_ignored('PS5 Slim', auto_delete=True)
+        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(2,?,?)', ('Xbox', 'xbox'))
+        self.add_offer(1, 'Notebook em oferta', grouped=55)
+        self.add_offer(2, 'Xbox e PS5 Slim', grouped=55)
+
+        self.assertTrue(self.store.remove_rule(1))
+        self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 2)
+        self.assertEqual(self.store.rows('SELECT offer_id,rule_id FROM hits'),
+                         [{'offer_id': 2, 'rule_id': 2}])
+
+    def test_removing_rule_with_no_hit_candidates_does_not_delete_auto_delete_matches(self):
+        self.add_offer(1, 'PS5 Slim sem alerta')
+        self.store.execute('INSERT INTO ignored_keywords(word,normalized,auto_delete) VALUES(?,?,1)',
+                           ('PS5 Slim', 'ps5 slim'))
+
+        self.assertTrue(self.store.remove_rule(1))
+        self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 1)
+
     def test_recently_deleted_includes_manual_and_ignored_until_physical_removal(self):
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
@@ -340,6 +377,13 @@ class IgnoredWordsTests(unittest.TestCase):
                                                     ' ORDER BY date DESC,id DESC LIMIT 100', args)]
         self.assertTrue(any('offers_recent' in row['detail'] for row in plan))
         self.assertEqual(reopened.feed()[0]['message_id'], 1)
+
+    def test_rule_hit_index_is_added_to_existing_database_and_used(self):
+        self.store.execute('DROP INDEX hits_rule_offer')
+        reopened = Store(self.store.path)
+        plan = ' '.join(row['detail'] for row in reopened.rows(
+            'EXPLAIN QUERY PLAN SELECT offer_id FROM hits WHERE rule_id=1'))
+        self.assertIn('hits_rule_offer', plan)
 
     def test_persistence_and_additive_migration_preserve_existing_data(self):
         self.add_offer(1, 'Notebook PS5')
