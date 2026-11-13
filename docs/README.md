@@ -16,6 +16,7 @@ Organização adaptada do RazorMiniflux: contrato operacional na raiz, decisões
 | [ADR-0008](architecture/ADR-0008-fila-extracao-concorrente.md) | Concorrência, timeout e reenvio da fila de extração IA |
 | [ADR-0009](architecture/ADR-0009-autoexclusao-permanente.md) | Autoexclusão permanente por palavra ignorada |
 | [ADR-0010](architecture/ADR-0010-observabilidade-metricas-jobs-ia.md) | Observabilidade e métricas acumuladas dos jobs de IA |
+| [ADR-0011](architecture/ADR-0011-sqlite-wal.md) | WAL e espera de locks SQLite |
 | [Primeira entrega](plans/primeira-entrega.md) | Escopo, critérios de aceite e estado da entrega |
 | [Operação](operacao.md) | Publicação, dados, atualização e recuperação |
 | [Verificação](verificacao.md) | Como repetir testes e limites das evidências |

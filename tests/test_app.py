@@ -4,6 +4,7 @@ import os
 import hashlib
 import hmac
 import tempfile
+import sqlite3
 import unittest
 import time
 from pathlib import Path
@@ -46,6 +47,21 @@ class StoreTests(unittest.TestCase):
 
     def ingest(self, chat=-100123, body='Café barato'):
         self.store.ingest(chat, 1, body, '2026-11-04T12:00:00+00:00', None)
+
+    def test_wal_allows_reads_during_an_open_write_transaction(self):
+        with self.store.connect() as db:
+            self.assertEqual(db.execute('PRAGMA journal_mode').fetchone()[0], 'wal')
+            self.assertEqual(db.execute('PRAGMA busy_timeout').fetchone()[0], 30000)
+
+        writer = sqlite3.connect(self.store.path)
+        try:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute("INSERT INTO chats(id,title) VALUES(1,'Em andamento')")
+            self.assertEqual(self.store.rows('SELECT id,title FROM chats'),
+                             [{'id': -100123, 'title': 'Ofertas'}])
+        finally:
+            writer.rollback()
+            writer.close()
 
     def test_media_signing_key_persists_in_settings(self):
         key = self.store.media_signing_key()

@@ -72,6 +72,7 @@ class Store:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.path = path
         with self.connect() as db:
+            db.execute('PRAGMA journal_mode=WAL')
             columns = {r['name'] for r in db.execute('PRAGMA table_info(offers)')}
             if columns and not {'source_json', 'grouped_id'} <= columns:
                 backup = Path(str(path) + '.before-rich-messages.db')
@@ -407,7 +408,7 @@ class Store:
 
     @contextmanager
     def connect(self):
-        db = sqlite3.connect(self.path)
+        db = sqlite3.connect(self.path, timeout=30)
         db.row_factory = sqlite3.Row
         try:
             db.execute('PRAGMA foreign_keys=ON')
