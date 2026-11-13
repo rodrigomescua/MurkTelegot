@@ -15,7 +15,7 @@
     </form>
   </section>
   <section class="management-panel management-list" id="ignored-management">
-    <h2>Palavras cadastradas</h2>
+    <div class="ignored-titlebar"><h2>Palavras cadastradas</h2><button type="button" class="secondary" id="show-irrelevant" {% if not irrelevant_words %}disabled{% endif %}>Filtros irrelevantes ({{ irrelevant_words|length }})</button></div>
     <div class="management-toolbar">
       <form class="management-search" method="get" action="/ignored">
         <label for="ignored-search">Buscar nas palavras ignoradas</label>
@@ -62,4 +62,11 @@
     </nav>{% endif %}
   </section>
 </div>
+<dialog id="irrelevant-dialog" class="quick-dialog" aria-labelledby="irrelevant-title">
+  <div class="modal-heading"><h2 id="irrelevant-title">Filtros irrelevantes</h2><button type="button" class="secondary" id="close-irrelevant">Fechar ✕</button></div>
+  <div class="irrelevant-content">
+    <p>Estes filtros podem ser removidos porque outro filtro cadastrado já corresponde a eles:</p>
+    <ul>{% for word in irrelevant_words %}<li><strong>{{ word.word }}</strong> — já coberto por {{ word.covered_by|join(', ') }}</li>{% endfor %}</ul>
+  </div>
+</dialog>
 {% endblock %}

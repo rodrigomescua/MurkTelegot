@@ -162,6 +162,19 @@ class StoreTests(unittest.TestCase):
                          [{'ignored_at': None, 'ignored_word': None},
                           {'ignored_at': None, 'ignored_word': None}])
 
+    def test_irrelevant_ignored_filters_report_all_shorter_matches(self):
+        self.store.add_ignored('teste de filtro')
+        self.store.add_ignored('teste')
+        self.store.add_ignored('filtro')
+        self.store.add_ignored('café')
+        self.store.add_ignored('casa')
+        self.store.add_ignored('casamento')
+
+        self.assertEqual(self.store.irrelevant_ignored_words(), [{
+            'id': self.store.rows("SELECT id FROM ignored_keywords WHERE normalized='teste de filtro'")[0]['id'],
+            'word': 'teste de filtro', 'normalized': 'teste de filtro', 'covered_by': ['filtro', 'teste'],
+        }])
+
     def test_add_rule_notifies_each_matching_album_once(self):
         self.store.ingest(-100123, 10, 'Café já alertado', '2026-11-04T12:00:00+00:00', None,
                           source_json='{"grouped_id": 50}')
@@ -787,6 +800,17 @@ class WebTests(unittest.TestCase):
             follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertIn('/ignored?q=produto&page=2', response.headers['location'])
+
+    def test_ignored_page_lists_irrelevant_filters_in_modal(self):
+        main.store.add_ignored('teste de filtro')
+        main.store.add_ignored('teste')
+        main.store.add_ignored('filtro')
+
+        response = self.client.get('/ignored', cookies=self.auth)
+
+        self.assertIn('Filtros irrelevantes (1)', response.text)
+        self.assertIn('id="irrelevant-dialog"', response.text)
+        self.assertIn('teste de filtro</strong> — já coberto por filtro, teste', response.text)
 
     def test_ignored_search_matches_accentless_and_keeps_search_literals(self):
         main.store.add_ignored('Café especial')

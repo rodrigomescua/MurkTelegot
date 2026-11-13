@@ -702,9 +702,11 @@ async def ignored_page(request: Request, notice: str = '', q: str = '', page: in
     if len(q) > 100 or page < 1:
         raise HTTPException(400, 'Filtro inválido.')
     ignored_words, total, page, pages = store.ignored_words_page(q, page)
+    irrelevant_words = store.irrelevant_ignored_words()
     return templates.TemplateResponse(request, 'ignored.html', {
         'csrf': csrf_token, 'notice': notice,
-        'ignored_words': ignored_words, 'q': q, 'page': page, 'pages': pages, 'total': total,
+        'ignored_words': ignored_words, 'irrelevant_words': irrelevant_words,
+        'q': q, 'page': page, 'pages': pages, 'total': total,
     })
 
 

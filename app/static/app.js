@@ -524,6 +524,9 @@ document.addEventListener('submit', handleOfferCardSubmit);
 
 
 const ignoredSettings = document.querySelector('#ignored-settings');
+const irrelevantDialog = document.querySelector('#irrelevant-dialog');
+document.querySelector('#show-irrelevant')?.addEventListener('click', () => irrelevantDialog?.showModal());
+document.querySelector('#close-irrelevant')?.addEventListener('click', () => irrelevantDialog?.close());
 function filterRules(ruleSearch) {
   if (!ruleSearch) return;
   const rows = [...document.querySelectorAll('.rule-item')];

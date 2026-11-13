@@ -83,3 +83,4 @@
 .coupon-status{flex:0 0 auto;padding:4px 9px;border:1px solid var(--border);border-radius:999px;color:var(--muted);font-size:13px}
 .coupon-conditions{margin:10px 0;color:var(--muted);overflow-wrap:anywhere}
 .coupon-card form,.coupon-card button{margin:0}
+.ignored-titlebar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-bottom:12px}.ignored-titlebar h2{margin:0}.irrelevant-content{padding:16px 20px}

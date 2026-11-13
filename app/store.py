@@ -1210,6 +1210,18 @@ class Store:
                 [*args, page_size, (page - 1) * page_size])]
         return rows, total, page, pages
 
+    def irrelevant_ignored_words(self):
+        with self.connect() as db:
+            rows = [dict(row) for row in db.execute(
+                'SELECT id,word,normalized FROM ignored_keywords ORDER BY normalized,id')]
+        irrelevant = []
+        for row in rows:
+            covered_by = [other['word'] for other in rows if other['id'] != row['id'] and
+                          ignored_matches(row['normalized'], other['normalized'])]
+            if covered_by:
+                irrelevant.append({**row, 'covered_by': covered_by})
+        return irrelevant
+
     def frequent_terms(self):
         # Count each phrase once per offer, including an album's separate messages.
         stopwords = {'a', 'as', 'ao', 'aos', 'o', 'os', 'um', 'uma', 'uns', 'umas',
