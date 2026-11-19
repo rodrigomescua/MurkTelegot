@@ -103,12 +103,13 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertFalse(self.store.add_ignored('ps5 slim'))
         self.add_offer(2, 'Notebook com ps5 slim, promoção')
         self.add_offer(3, 'Notebook para PS5pro item')
-        self.assertEqual([o['message_id'] for o in self.store.feed()], [3, 2, 1])
+        self.assertEqual(self.store.feed(), [])
         self.assertEqual({o['message_id'] for o in self.store.feed(alerts=True)}, {1, 2, 3})
         self.assertEqual(self.store.unread(), 3)
         self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 3)
         self.store.execute('DELETE FROM ignored_keywords')
-        self.assertEqual(len(self.store.feed()), 3)
+        self.assertEqual(self.store.feed(), [])
+        self.assertEqual(len(self.store.feed(alerts=True)), 3)
         self.assertEqual(self.store.unread(), 3)
 
     def test_existing_ignored_word_updates_auto_delete_flag(self):
@@ -192,7 +193,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.store.execute('INSERT INTO chats VALUES(-100456,?)', ('Outro',))
         self.store.ingest(-100456, 1, 'Notebook normal', '2026-11-04', None,
                           source_json=json.dumps({'grouped_id': 55}))
-        self.assertEqual({o['chat_id'] for o in self.store.feed()}, {-100456, -100123})
+        self.assertEqual(self.store.feed(), [])
         cards = self.store.feed(alerts=True)
         album = next(o for o in cards if o['chat_id'] == -100123)
         self.assertEqual([p['message_id'] for p in album['parts']], [1, 2])
@@ -217,10 +218,10 @@ class IgnoredWordsTests(unittest.TestCase):
                           source_json='{"grouped_id":55}')
         self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 3)
         self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 2)
-        self.assertIn(single, [card['id'] for card in self.store.feed()])
-        self.assertEqual(len(self.store.feed()), 2)
+        self.assertNotIn(single, [card['id'] for card in self.store.feed()])
+        self.assertEqual(len(self.store.feed()), 0)
         self.assertEqual(self.store.feed(deleted=True), [])
-        self.assertEqual(self.store.term_offers('notebook')[1], 2)
+        self.assertEqual(self.store.term_offers('notebook')[1], 0)
 
     def test_removing_last_alert_rule_applies_existing_auto_delete_to_album_atomically(self):
         self.store.add_ignored('PS5 Slim', auto_delete=True)
@@ -338,7 +339,7 @@ class IgnoredWordsTests(unittest.TestCase):
         self.assertEqual(self.store.feed(alerts=True, read=False), [])
         self.assertEqual(self.store.unread(), 0)
 
-    def test_home_hides_read_alerts_but_keeps_unread_alerts_and_non_alert_offers(self):
+    def test_home_excludes_all_alerts_but_keeps_non_alert_offers(self):
         self.add_offer(1, 'Notebook alerta não lido')
         self.add_offer(2, 'Notebook alerta lido')
         self.add_offer(3, 'Oferta sem alerta')
@@ -347,7 +348,7 @@ class IgnoredWordsTests(unittest.TestCase):
             self.add_offer(message_id, f'Notebook álbum {message_id}', grouped=99 if message_id < 6 else 100)
         self.store.mark_seen(4)
         home = self.store.feed()
-        self.assertEqual({card['id'] for card in home}, {1, 3, 6})
+        self.assertEqual({card['id'] for card in home}, {3})
         self.assertEqual({card['id'] for card in self.store.feed(alerts=True, read=False)}, {1, 6})
 
     def test_new_offers_respect_filters_and_count_albums_once(self):
@@ -359,8 +360,8 @@ class IgnoredWordsTests(unittest.TestCase):
         self.add_offer(4, 'Outra parte', grouped=12)
         self.add_offer(5, 'Notebook PS5 Slim')
         self.add_offer(6, 'Oferta diferente')
-        self.assertEqual(self.store.new_offers(marker), 3)
-        self.assertEqual(self.store.new_offers(marker, 'Notebook'), 2)
+        self.assertEqual(self.store.new_offers(marker), 1)
+        self.assertEqual(self.store.new_offers(marker, 'Notebook'), 0)
         self.assertEqual(self.store.new_offers(marker, alerts=True), 2)
         self.assertEqual(self.store.new_offers(marker, 'Notebook', True), 2)
 
@@ -454,7 +455,8 @@ class IgnoredWordsWebTests(unittest.TestCase):
     def test_poll_requires_auth_and_reports_matching_new_offers(self):
         self.assertEqual(self.client.get('/offers/new?after=1', headers={'Accept': 'application/json'}).status_code, 401)
         self.store.ingest(-100123, 2, 'Notebook', '2026-11-04', None)
-        self.assertEqual(self.client.get('/offers/new?after=1', cookies=self.auth).json(), {'count': 1})
+        self.assertEqual(self.client.get('/offers/new?after=1', cookies=self.auth).json(), {'count': 0})
+        self.assertEqual(self.client.get('/offers/new?after=1&alerts=true', cookies=self.auth).json(), {'count': 1})
         self.assertEqual(self.client.get('/offers/new?after=-1', cookies=self.auth).status_code, 400)
 
     def test_deleted_page_displays_ignored_word_but_not_for_manual_deletion(self):
@@ -480,7 +482,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
         response = self.client.post('/ignored', cookies=self.auth, data=data, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
-        self.assertIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
+        self.assertNotIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
         alerts = self.client.get('/?alerts=true', cookies=self.auth)
         self.assertIn('Notebook e PS5 Slim!', alerts.text)
         self.assertIn('Novo alerta', alerts.text)
@@ -499,7 +501,7 @@ class IgnoredWordsWebTests(unittest.TestCase):
                                     follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertTrue(response.headers['location'].startswith('/ignored?'))
-        self.assertIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
+        self.assertNotIn('Notebook e PS5 Slim!', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.store.unread(), 1)
 
     def test_create_with_auto_delete_and_toggle_existing_rule(self):

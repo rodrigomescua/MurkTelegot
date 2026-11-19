@@ -333,7 +333,8 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
                 await telegram.receive(event(4, 'Notebook', chat=999))
                 self.assertEqual(send.call_count, 2)
                 self.assertIn('**Notebook** PS5 Slim', send.call_args_list[0].args[3])
-                self.assertEqual(len(store.feed()), 2)
+                self.assertEqual(len(store.feed()), 0)
+                self.assertEqual(len(store.feed(alerts=True)), 2)
                 self.assertEqual(store.unread(), 2)
 
     async def test_refresh_also_sends_new_alert_once(self):

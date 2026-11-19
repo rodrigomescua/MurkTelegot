@@ -20,7 +20,6 @@ class FrequentTermsTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = Store(Path(self.tmp.name) / 'offers.db')
         self.store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
-        self.store.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Alerta', 'ps5'))
 
     def add(self, number, body, group=None):
         source = json.dumps({'grouped_id': group}) if group is not None else None
@@ -139,8 +138,8 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(sum(len(card['parts']) for card in first + second), 5)
         self.assertNotIn(4, [part['message_id'] for card in first + second for part in card['parts']])
         self.store.add_ignored('preço baixo')
-        self.assertEqual(self.store.term_offers('preço baixo')[1], 4)
-        self.assertEqual(self.store.unread(), 5)
+        self.assertEqual(self.store.term_offers('preço baixo')[1], 0)
+        self.assertEqual(self.store.unread(), 0)
 
     def test_term_lookup_matches_frequency_for_decomposed_unicode_and_over_100_offers(self):
         for number in range(1, 105):
@@ -181,6 +180,7 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertEqual(visible_ids, {2, 3})
 
     def test_persistent_hidden_suggestions_do_not_change_offers_or_alerts(self):
+        self.store.execute("INSERT INTO rules(name,keywords) VALUES('Alerta','ps5')")
         self.add(1, 'PS5 promoção')
         self.add(2, 'ps5 promocao')
         self.assertEqual(self.store.unread(), 2)
@@ -188,19 +188,19 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertFalse(self.store.hide_suggestion('promocao'))
         reopened = Store(self.store.path)
         self.assertNotIn('promoção', [term['word'] for term in reopened.frequent_terms()])
-        self.assertEqual(len(reopened.feed()), 2)
+        self.assertEqual(len(reopened.feed()), 0)
         self.assertEqual(reopened.unread(), 2)
         reopened.execute('DELETE FROM hidden_suggestions')
-        self.assertIn('promoção', [term['word'] for term in reopened.frequent_terms()])
+        self.assertNotIn('promoção', [term['word'] for term in reopened.frequent_terms()])
         reopened.add_ignored('promoção')
-        self.assertIn('promoção', [term['word'] for term in reopened.frequent_terms()])
-        self.assertEqual(len(reopened.feed()), 2)
+        self.assertNotIn('promoção', [term['word'] for term in reopened.frequent_terms()])
+        self.assertEqual(len(reopened.feed()), 0)
         self.assertEqual(len(reopened.feed(alerts=True)), 2)
         self.assertEqual(reopened.unread(), 2)
 
     def test_page_actions_auth_csrf_and_restoration(self):
-        self.add(1, 'PS5 promoção')
-        self.add(2, 'PS5 promoção')
+        self.add(1, 'Produto promoção')
+        self.add(2, 'Produto promoção')
         with patch.object(main, 'store', self.store):
             client = TestClient(main.app)
             token = 'test-terms-session'
@@ -218,7 +218,7 @@ class FrequentTermsTests(unittest.TestCase):
             data = {'csrf': main.csrf_token, 'word': 'promoção'}
             self.assertTrue(client.post('/terms/hide', cookies=cookies, data=data, headers=headers).json()['ok'])
             self.assertEqual(len(self.store.feed()), 2)
-            self.assertEqual(self.store.unread(), 2)
+            self.assertEqual(self.store.unread(), 0)
             hidden_id = self.store.rows('SELECT id FROM hidden_suggestions')[0]['id']
             self.assertTrue(client.post(f'/terms/restore/{hidden_id}', cookies=cookies, data={'csrf': main.csrf_token}, headers=headers).json()['ok'])
             self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
@@ -227,11 +227,12 @@ class FrequentTermsTests(unittest.TestCase):
                                  follow_redirects=False)
             self.assertEqual(result.status_code, 303)
             self.assertTrue(result.headers['location'].startswith('/terms?'))
-            self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 2)
-            self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 2)
-            self.assertEqual(self.store.unread(), 2)
+            self.assertEqual(len(self.store.rows('SELECT * FROM offers')), 0)
+            self.assertEqual(len(self.store.rows('SELECT * FROM hits')), 0)
+            self.assertEqual(self.store.unread(), 0)
 
     def test_frequencies_exclude_ignored_offers_and_whole_albums(self):
+        self.store.execute("INSERT INTO rules(name,keywords) VALUES('Alerta','ps5')")
         self.add(1, 'Cafeteira PS5 Slim!')
         self.add(2, 'Cafeteira (ps5 slim)')
         self.add(3, 'Cafeteira de viagem', 42)
@@ -239,15 +240,15 @@ class FrequentTermsTests(unittest.TestCase):
         self.add(5, 'Cafeteira doméstica')
         self.add(6, 'Cafeteira doméstica')
         self.add(7, 'Cafeteira PS5pro')
-        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 6)
+        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 3)
         self.store.add_ignored('PS5 Slim')
         terms = {normalize(t['word']): t['count'] for t in self.store.frequent_terms()}
-        self.assertEqual(terms['cafeteira'], 6)
-        self.assertEqual(len(self.store.feed()), 6)
+        self.assertEqual(terms['cafeteira'], 3)
+        self.assertEqual(len(self.store.feed()), 3)
         self.assertEqual(len(self.store.feed(alerts=True)), 3)
         self.assertEqual(self.store.unread(), 3)
         self.store.execute('DELETE FROM ignored_keywords')
-        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 6)
+        self.assertEqual(next(t['count'] for t in self.store.frequent_terms() if t['word'] == 'cafeteira'), 3)
 
     def test_hidden_phrases_hide_contained_whole_terms_and_restore(self):
         self.add(1, 'Preço baixo PS5pro preço baixote')
@@ -270,16 +271,17 @@ class FrequentTermsTests(unittest.TestCase):
         self.assertIn('preco', {normalize(t['word']) for t in self.store.frequent_terms()})
 
     def test_batch_actions_are_atomic_and_preserve_alerts(self):
+        self.store.execute("INSERT INTO rules(name,keywords) VALUES('Alerta','ps5')")
         self.add(1, 'PS5 promoção preço baixo')
         self.add(2, 'PS5 promoção preço baixo')
         with self.assertRaises(ValueError):
             self.store.add_terms_batch('hide', ['promoção', '   '])
         self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
         self.assertEqual(self.store.add_terms_batch('hide', ['promoção', 'PROMOCAO', 'preço baixo']), 2)
-        self.assertEqual(len(self.store.feed()), 2)
+        self.assertEqual(len(self.store.feed()), 0)
         self.assertEqual(self.store.unread(), 2)
         self.assertEqual(self.store.add_terms_batch('ignore', ['ps5 promoção', 'outro']), 2)
-        self.assertEqual(len(self.store.feed()), 2)
+        self.assertEqual(len(self.store.feed()), 0)
         self.assertEqual(self.store.unread(), 2)
         with self.assertRaises(ValueError):
             self.store.add_terms_batch('ignore', ['x'] * 51)

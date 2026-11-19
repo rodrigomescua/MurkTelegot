@@ -319,16 +319,34 @@ async function handleOfferCardSubmit(event) {
   if (!card) return;
   event.preventDefault();
   if (form.dataset.busy) return;
-  if (action) sequence = ++cardActionSequence;
+  if (action === 'delete') sequence = ++cardActionSequence;
   form.dataset.busy = 'true';
   const button = event.submitter || form.querySelector('button');
   button.disabled = true;
-  const overlay = card.querySelector('.offer-action-overlay');
   try {
     const response = await fetch(form.action, {method: 'POST', body: new FormData(form), headers: {Accept: 'application/json'}, credentials: 'same-origin'});
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível atualizar o alerta. Tente novamente.');
     updateUnreadCounter(result.unread);
+    if (action === 'seen') {
+      const unread = card.closest('[data-alert-section="unread"]');
+      const read = document.querySelector('[data-alert-section="read"]');
+      form.removeAttribute('data-mark-seen');
+      form.dataset.deleteOffer = '';
+      form.classList.add('card-delete');
+      form.action = form.action.replace(/\/seen$/, '/delete');
+      button.setAttribute('aria-label', 'Excluir oferta');
+      button.querySelector('svg path').setAttribute('d', 'M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6');
+      button.querySelector('span').textContent = 'Excluir';
+      const badge = card.querySelector('.offer-overview .match');
+      badge.textContent = badge.textContent.replace(/^Novo alerta · /, 'Lido · ');
+      read.querySelector('[data-alert-grid]').append(card);
+      updateAlertSection(unread, Math.max(0, Number(unread.querySelector('[data-alert-count]').textContent) - 1));
+      updateAlertSection(read, Number(read.querySelector('[data-alert-count]').textContent) + 1);
+      card.querySelector('.offer-open')?.focus();
+      return;
+    }
+    const overlay = card.querySelector('.offer-action-overlay');
     const detail = card.querySelector('.offer-detail');
     const actions = card.querySelector('.offer-card-actions');
     if (undo) {
@@ -338,13 +356,6 @@ async function handleOfferCardSubmit(event) {
       overlay.hidden = true;
       overlay.querySelector('strong').textContent = '';
       if (globalUndo?.dataset.card === `#${CSS.escape(card.id)}`) hideGlobalUndo();
-      if (form.action.includes('/seen/undo') && document.querySelector('#feed[data-alerts="true"]')) {
-        const unread = document.querySelector('[data-alert-section="unread"]');
-        const read = document.querySelector('[data-alert-section="read"]');
-        unread.querySelector('[data-alert-grid]').prepend(card);
-        updateAlertSection(unread, Number(unread.querySelector('[data-alert-count]').textContent) + 1);
-        updateAlertSection(read, Math.max(0, Number(read.querySelector('[data-alert-count]').textContent) - 1));
-      }
       card.querySelector('.offer-open')?.focus({preventScroll: true});
     } else {
       const undoForm = overlay.querySelector('[data-card-undo]');
@@ -352,19 +363,12 @@ async function handleOfferCardSubmit(event) {
       detail.inert = true;
       actions.inert = true;
       card.classList.add('offer-card-actioned');
-      overlay.querySelector('strong').textContent = action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.';
+      overlay.querySelector('strong').textContent = 'Oferta excluída.';
       overlay.hidden = false;
-      if (action === 'seen' && document.querySelector('#feed[data-alerts="true"]')) {
-        const unread = document.querySelector('[data-alert-section="unread"]');
-        const read = document.querySelector('[data-alert-section="read"]');
-        read.querySelector('[data-alert-grid]').append(card);
-        updateAlertSection(unread, Math.max(0, Number(unread.querySelector('[data-alert-count]').textContent) - 1));
-        updateAlertSection(read, Number(read.querySelector('[data-alert-count]').textContent) + 1);
-      }
-      if (action === 'delete' && card.parentElement.matches('.offer-grid')) card.parentElement.append(card);
+      if (card.parentElement.matches('.offer-grid')) card.parentElement.append(card);
       if (sequence > globalUndoSequence) {
         globalUndoSequence = sequence;
-        showGlobalUndo(card, action === 'seen' ? 'Alerta marcado como lido.' : 'Oferta excluída.');
+        showGlobalUndo(card, 'Oferta excluída.');
         globalUndo?.focus({preventScroll: true});
       }
     }

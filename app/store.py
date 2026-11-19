@@ -81,8 +81,8 @@ def offer_term_groups(rows, ignored):
     for row in rows:
         grouped.setdefault(key(row), []).append(row)
     for parts in grouped.values():
-        if (not pattern or any(part['has_alert'] for part in parts)
-                or not any(pattern.search(normalize(part['body'])) for part in parts)):
+        if (not any(part['has_alert'] for part in parts)
+                and (not pattern or not any(pattern.search(normalize(part['body'])) for part in parts))):
             yield parts
 
 
@@ -149,7 +149,7 @@ class Store:
                     code TEXT NOT NULL, code_key TEXT NOT NULL, conditions TEXT,
                     status TEXT NOT NULL CHECK(status IN ('active','inactive')),
                     links_json TEXT NOT NULL DEFAULT '[]',
-                    inactive_at TEXT, updated_at TEXT NOT NULL,
+                    inactive_at TEXT, first_seen_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
                     UNIQUE(store_key,code_key));
                 CREATE TABLE IF NOT EXISTS ai_jobs (
                     id INTEGER PRIMARY KEY, status TEXT NOT NULL, replace_existing INTEGER NOT NULL,
@@ -194,6 +194,23 @@ class Store:
                     finally:
                         temporary.unlink(missing_ok=True)
                 db.execute("ALTER TABLE coupons ADD COLUMN links_json TEXT NOT NULL DEFAULT '[]'")
+            if coupon_columns and 'first_seen_at' not in coupon_columns:
+                backup = Path(str(path) + '.before-coupon-first-seen.db')
+                if not backup.exists():
+                    temporary = Path(str(backup) + '.tmp')
+                    try:
+                        snapshot = sqlite3.connect(temporary)
+                        try:
+                            db.backup(snapshot)
+                        finally:
+                            snapshot.close()
+                        os.replace(temporary, backup)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+                db.execute('BEGIN IMMEDIATE')
+                db.execute("ALTER TABLE coupons ADD COLUMN first_seen_at TEXT NOT NULL DEFAULT ''")
+                db.execute("UPDATE coupons SET first_seen_at=updated_at WHERE first_seen_at=''")
+                db.commit()
             if 'result_json' not in extraction_columns:
                 backup = Path(str(path) + '.before-ai-extraction-details.db')
                 if not backup.exists():
@@ -579,7 +596,8 @@ class Store:
                 if automatic:
                     return None, 0
                 raise ValueError('Configure as chaves dos provedores selecionados antes de iniciar o processamento.')
-            cards = self.feed('', False, db, offer_ids=offer_ids if not automatic else None)
+            cards = self.feed('', False, db, offer_ids=offer_ids if not automatic else None,
+                              include_alerts=automatic)
             if offer_ids is not None:
                 cards = [card for card in cards if card['id'] in offer_ids]
                 if not automatic and any(db.execute("""SELECT 1 FROM ai_job_items i JOIN ai_jobs j ON j.id=i.job_id
@@ -826,47 +844,49 @@ class Store:
                            (item['offer_id'], *(extraction.get(field) for field in
                             ('product_name', 'original_price', 'discounted_price', 'coupon_code')),
                             json.dumps(extraction, ensure_ascii=False), item['job_id'], now))
-                coupon_saved = False
-                for coupon in extraction.get('coupons', []):
-                    store, code = coupon.get('store'), coupon.get('code')
-                    if not store or not code:
-                        continue
-                    store_key, code_key = store.strip().casefold(), code.strip().casefold()
-                    if not store_key or not code_key:
-                        continue
-                    coupon_saved = True
-                    existing = db.execute('SELECT id,status,inactive_at,links_json FROM coupons WHERE store_key=? AND code_key=?',
-                                          (store_key, code_key)).fetchone()
-                    inactive = coupon.get('status') == 'inactive' or (existing and existing['status'] == 'inactive')
-                    inactive_at = (existing['inactive_at'] if existing and existing['inactive_at'] else now) if inactive else None
-                    links = coupon.get('links') or []
-                    links_json = json.dumps(links, ensure_ascii=False)
-                    if existing and not links:
-                        links_json = existing['links_json'] or '[]'
-                    db.execute('''INSERT INTO coupons
-                        (store,store_key,code,code_key,conditions,status,links_json,inactive_at,updated_at)
-                        VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(store_key,code_key) DO UPDATE SET
-                        store=excluded.store,code=excluded.code,conditions=coalesce(excluded.conditions,coupons.conditions),
-                        links_json=excluded.links_json,
-                        status=excluded.status,inactive_at=coalesce(coupons.inactive_at,excluded.inactive_at),
-                        updated_at=excluded.updated_at''',
-                               (store, store_key, code, code_key, coupon.get('conditions'),
-                                'inactive' if inactive else 'active', links_json, inactive_at, now))
+                if extraction.get('product_present') is False:
+                    active_coupons, inactive_keys = {}, set()
+                    for coupon in extraction.get('coupons', []):
+                        store, code = coupon.get('store'), coupon.get('code')
+                        if not store or not code:
+                            continue
+                        store_key, code_key = store.strip().casefold(), code.strip().casefold()
+                        if not store_key or not code_key:
+                            continue
+                        key = (store_key, code_key)
+                        if coupon['status'] == 'inactive':
+                            inactive_keys.add(key)
+                        else:
+                            active_coupons[key] = coupon
+                    for store_key, code_key in inactive_keys:
+                        db.execute('DELETE FROM coupons WHERE store_key=? AND code_key=?', (store_key, code_key))
+                    for (store_key, code_key), coupon in active_coupons.items():
+                        if (store_key, code_key) in inactive_keys:
+                            continue
+                        existing = db.execute('SELECT status,inactive_at FROM coupons WHERE store_key=? AND code_key=?',
+                                              (store_key, code_key)).fetchone()
+                        inactive = bool(existing and existing['status'] == 'inactive')
+                        links_json = json.dumps(coupon.get('links') or [], ensure_ascii=False)
+                        db.execute('''INSERT INTO coupons
+                            (store,store_key,code,code_key,conditions,status,links_json,inactive_at,first_seen_at,updated_at)
+                            VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(store_key,code_key) DO UPDATE SET
+                            store=excluded.store,code=excluded.code,conditions=excluded.conditions,
+                            links_json=excluded.links_json,
+                            status=excluded.status,inactive_at=coalesce(coupons.inactive_at,excluded.inactive_at),
+                            updated_at=excluded.updated_at''',
+                                   (coupon['store'], store_key, coupon['code'], code_key, coupon.get('conditions'),
+                                    'inactive' if inactive else 'active', links_json,
+                                    existing['inactive_at'] if inactive else None, now, now))
                 if extraction.get('product_present') is False:
                     ids = [row['id'] for row in db.execute(
                         'SELECT id FROM offers WHERE chat_id=? AND (id=? OR (? IS NOT NULL AND grouped_id=?))',
                         (root['chat_id'], root['id'], root['grouped_id'], root['grouped_id']))]
-                    if coupon_saved:
-                        if ids:
-                            pairs = [(offer_id,) for offer_id in ids]
-                            db.executemany('DELETE FROM offer_extractions WHERE offer_id=?', pairs)
-                            db.executemany('UPDATE ai_job_items SET result_json=NULL WHERE offer_id=?', pairs)
-                            db.executemany('DELETE FROM hits WHERE offer_id=?', [(offer_id,) for offer_id in ids])
-                            db.executemany('DELETE FROM offers WHERE id=?', [(offer_id,) for offer_id in ids])
-                    elif ids:
-                        deleted_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
-                        db.executemany('UPDATE offers SET deleted_at=coalesce(deleted_at,?) WHERE id=?',
-                                       [(deleted_at, offer_id) for offer_id in ids])
+                    if ids:
+                        pairs = [(offer_id,) for offer_id in ids]
+                        db.executemany('DELETE FROM offer_extractions WHERE offer_id=?', pairs)
+                        db.executemany('UPDATE ai_job_items SET result_json=NULL WHERE offer_id=?', pairs)
+                        db.executemany('DELETE FROM hits WHERE offer_id=?', pairs)
+                        db.executemany('DELETE FROM offers WHERE id=?', pairs)
             result_json = json.dumps(extraction, ensure_ascii=False) if status == 'succeeded' and extraction else None
             if not db.execute('SELECT 1 FROM offers WHERE id=?', (item['offer_id'],)).fetchone() and not item['show_result']:
                 result_json = None
@@ -1489,9 +1509,13 @@ class Store:
         now = now or datetime.now(timezone.utc)
         deleted_before = (now - timedelta(hours=1)).isoformat()
         short = (now - timedelta(hours=4)).isoformat()
+        coupon_expired_before = (now - timedelta(hours=12)).isoformat()
         long = (now - timedelta(hours=24)).isoformat()
         with self.connect() as db:
             self._register_ignored_filter(db)
+            db.execute('''UPDATE coupons SET status='inactive',inactive_at=?
+                WHERE status='active' AND julianday(first_seen_at)<=julianday(?)''',
+                       (now.isoformat(timespec='seconds'), coupon_expired_before))
             expired = [row[0] for row in db.execute('SELECT id FROM offers WHERE deleted_at IS NOT NULL AND deleted_at<=?',
                                                     (deleted_before,))]
             if expired:
@@ -1517,7 +1541,7 @@ class Store:
                 (short, long)).fetchall()]
             if expired:
                 self._permanently_delete_offers(db, expired)
-            db.execute("DELETE FROM coupons WHERE status='inactive' AND inactive_at<=?", (short,))
+            db.execute("DELETE FROM coupons WHERE status='inactive' AND julianday(inactive_at)<=julianday(?)", (short,))
 
     def coupons_by_store(self):
         with self.connect() as db:
@@ -1565,21 +1589,23 @@ class Store:
                            (row['chat_id'], row['grouped_id']))
             return True
 
-    def feed_filter(self, q='', alerts=False):
+    def feed_filter(self, q='', alerts=False, include_alerts=False):
         clauses, args = ['o.deleted_at IS NULL'], []
         if alerts:
             clauses.append('EXISTS(SELECT 1 FROM hits WHERE offer_id=o.id)')
         else:
-            clauses.append('''(NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
-                SELECT 1 FROM offers m WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
-                  AND ignored_offer(m.body))) OR EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
-                    WHERE a.id=o.id OR (o.grouped_id IS NOT NULL AND a.chat_id=o.chat_id
-                      AND a.grouped_id=o.grouped_id)))''')
             alert_group = '''(a.id=o.id OR (o.grouped_id IS NOT NULL AND a.chat_id=o.chat_id
                 AND a.grouped_id=o.grouped_id))'''
-            clauses.append(f'''(NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
-                WHERE {alert_group}) OR EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
-                WHERE {alert_group} AND a.seen=0))''')
+            ignored_clause = '''NOT ignored_offer(o.body) AND NOT (o.grouped_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM offers m WHERE m.chat_id=o.chat_id AND m.grouped_id=o.grouped_id
+                  AND ignored_offer(m.body)))'''
+            if include_alerts:
+                clauses.append(f'''({ignored_clause} OR EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                    WHERE {alert_group}))''')
+            else:
+                clauses.append(ignored_clause)
+                clauses.append(f'''NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
+                    WHERE {alert_group})''')
         if q:
             clauses.append("body LIKE ? ESCAPE '\\'")
             args.append('%' + q.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_') + '%')
@@ -1605,10 +1631,10 @@ class Store:
             return offers, total, page, pages
 
     def feed(self, q='', alerts=False, db=None, read=None, deleted=False, deleted_page=None,
-             offer_ids=None):
+             offer_ids=None, include_alerts=False):
         if db is None:
             with self.connect() as db:
-                return self.feed(q, alerts, db, read, deleted, deleted_page, offer_ids)
+                return self.feed(q, alerts, db, read, deleted, deleted_page, offer_ids, include_alerts)
         if not alerts:
             self._register_ignored_filter(db)
         if deleted:
@@ -1619,7 +1645,7 @@ class Store:
         elif offer_ids is not None:
             where, args = 'WHERE o.deleted_at IS NULL', []
         else:
-            where, args = self.feed_filter(q, alerts)
+            where, args = self.feed_filter(q, alerts, include_alerts)
         if offer_ids is not None:
             ids = list(offer_ids)
             if not ids:
@@ -1697,6 +1723,11 @@ class Store:
                 data = json.loads(row['result_json']) if row['result_json'] else extraction
             except (TypeError, ValueError):
                 data = extraction
+            structured_coupons = data.get('coupons') if isinstance(data, dict) else None
+            if isinstance(structured_coupons, list) and structured_coupons:
+                extraction['coupon_code'] = next((coupon.get('code') for coupon in structured_coupons
+                                                  if isinstance(coupon, dict) and coupon.get('status') == 'active'
+                                                  and isinstance(coupon.get('code'), str)), None)
             found[row['offer_id']] = extraction
             found_data[row['offer_id']] = data if isinstance(data, dict) else extraction
         pending = {row['offer_id'] for row in db.execute('''SELECT DISTINCT offer_id FROM ai_job_items

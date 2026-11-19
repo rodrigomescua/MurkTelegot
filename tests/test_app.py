@@ -156,7 +156,7 @@ class StoreTests(unittest.TestCase):
 
         self.assertEqual(self.store.rows('SELECT normalized FROM ignored_keywords'),
                          [{'normalized': 'xbox series'}])
-        self.assertEqual({row['message_id'] for row in self.store.feed()}, {10, 11})
+        self.assertEqual({row['message_id'] for row in self.store.feed()}, {10})
         self.assertEqual(self.store.rows('''SELECT ignored_at,ignored_word FROM offers
                                             WHERE message_id IN (10,11) ORDER BY message_id'''),
                          [{'ignored_at': None, 'ignored_word': None},
@@ -380,9 +380,8 @@ class WebTests(unittest.TestCase):
         catalog.assert_called_once_with('openai', 'typed-key')
         self.assertEqual(main.store.rows("SELECT * FROM settings WHERE key='ai_openai_key'"), [])
 
-    def test_ai_job_falls_back_and_extraction_is_prioritized_on_all_offer_screens(self):
+    def test_ai_job_falls_back_and_product_extraction_is_prioritized_on_non_alert_screens(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
-        main.store.add_rule('relógio')
         main.store.ingest(-100123, 1, 'Oferta original: relógio R$ 200', '2026-11-05T12:00:00+00:00', None)
         main.store.save_ai_settings('key-openai', 'key-router', [
             {'provider': 'openai', 'id': 'model-first'}, {'provider': 'openrouter', 'id': 'model-second'},
@@ -397,7 +396,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('data-job-create', jobs_page.text)
         self.assertIn('Job #1', jobs_page.text)
         self.assertIn('Progresso do job', jobs_page.text)
-        for url in ('/', '/alerts', '/terms/offers?word=relógio'):
+        for url in ('/', '/terms/offers?word=relógio'):
             self.assertIn('IA pendente', self.client.get(url, cookies=self.auth).text)
         self.assertEqual(self.client.get('/ai-jobs/status', cookies=self.auth).status_code, 200)
         job = main.store.claim_ai_job()
@@ -413,7 +412,7 @@ class WebTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in extract.call_args_list], ['openai', 'openrouter'])
         attempts = main.store.ai_jobs()[0][0]['logs']
         self.assertEqual([log['outcome'] for log in reversed(attempts)], ['failed', 'succeeded'])
-        for url in ('/', '/alerts', '/terms/offers?word=relógio'):
+        for url in ('/', '/terms/offers?word=relógio'):
             page = self.client.get(url, cookies=self.auth)
             self.assertIn('Relógio &lt;novo&gt;', page.text)
             self.assertIn('R$ 120', page.text)
@@ -422,6 +421,9 @@ class WebTests(unittest.TestCase):
             self.assertIn('Oferta original: relógio R$ 200', page.text)
             self.assertIn('Dados retornados pela IA', page.text)
             self.assertIn(r'M\u00ednimo R$ 100', page.text)
+        alerts = self.client.get('/alerts', cookies=self.auth)
+        self.assertNotIn('Relógio &lt;novo&gt;', alerts.text)
+        self.assertIn('0 ofertas exibidas', alerts.text)
 
     def test_manual_reextraction_requires_auth_csrf_and_returns_result_after_completion(self):
         main.store.execute('INSERT INTO chats VALUES(?,?)', (-100123, 'Grupo'))
@@ -1124,7 +1126,7 @@ class WebTests(unittest.TestCase):
         self.assertIn('Lidos · <span data-alert-count>1</span>', page.text)
         self.assertIn('Notebook PS5 Slim', page.text)
         self.assertIn('data-mark-seen', page.text)
-        self.assertIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
+        self.assertNotIn('Notebook PS5 Slim', self.client.get('/', cookies=self.auth).text)
         self.assertEqual(self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}).status_code, 403)
         response = self.client.post(f'/offers/{first}/seen', cookies=self.auth, headers={'Accept': 'application/json'}, data={'csrf': main.csrf_token})
         self.assertTrue(response.json()['ok'])

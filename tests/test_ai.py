@@ -75,7 +75,7 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(AIError):
                     await extract('openai', 'key', 'model', 'Oferta')
 
-    async def test_extraction_returns_coupon_list_and_drops_unidentifiable_coupons(self):
+    async def test_extraction_keeps_coupon_codes_without_a_store_for_offer_badges(self):
         payload = {'choices': [{'message': {'content': json.dumps({
             'product_present': False, 'product_name': None, 'original_price': None,
             'discounted_price': None, 'coupon_code': None,
@@ -88,11 +88,26 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
         })}}]}
         with patch('app.ai.request', return_value=payload):
             result = await extract('openai', 'key', 'model', 'Cupom SAVE')
-        self.assertEqual(result['coupons'], [{
-            'store': 'Loja X', 'code': 'SAVE', 'conditions': 'Mínimo R$ 100', 'status': 'active',
-            'links': [{'type': 'redeem', 'url': 'https://loja.example/resgatar'}],
-        }])
+        self.assertEqual(result['coupons'], [
+            {'store': 'Loja X', 'code': 'SAVE', 'conditions': 'Mínimo R$ 100', 'status': 'active',
+             'links': [{'type': 'redeem', 'url': 'https://loja.example/resgatar'}]},
+            {'store': None, 'code': 'OTHER', 'conditions': None, 'status': 'inactive', 'links': []},
+        ])
         self.assertEqual(result['coupon_code'], 'SAVE')
+
+    async def test_product_badge_uses_first_active_structured_coupon_or_simple_fallback(self):
+        for coupons, expected in (
+                ([{'store': 'Loja', 'code': 'OLD', 'status': 'inactive'},
+                  {'store': 'Loja', 'code': 'NEW', 'status': 'active'}], 'NEW'),
+                ([{'store': 'Loja', 'code': 'OLD', 'status': 'inactive'}], None),
+                ([{'store': None, 'code': 'SIMPLE', 'status': 'inactive'}], None),
+                ([], 'SIMPLE')):
+            result = {'product_present': True, 'product_name': 'Produto', 'original_price': None,
+                      'discounted_price': None, 'coupon_code': 'SIMPLE', 'coupons': coupons}
+            payload = {'choices': [{'message': {'content': json.dumps(result)}}]}
+            with self.subTest(expected=expected), patch('app.ai.request', return_value=payload):
+                extracted = await extract('openai', 'key', 'model', 'Produto e cupom')
+            self.assertEqual(extracted['coupon_code'], expected)
 
     async def test_provider_http_errors_have_stable_failure_categories(self):
         from app.ai import request
@@ -308,10 +323,12 @@ class AIStoreTests(unittest.TestCase):
                 code TEXT NOT NULL, code_key TEXT NOT NULL, conditions TEXT,
                 status TEXT NOT NULL, inactive_at TEXT, updated_at TEXT NOT NULL,
                 UNIQUE(store_key,code_key))''')
-            db.execute("INSERT INTO coupons VALUES(1,'Loja','loja','SAVE','save',NULL,'active',NULL,'now')")
+            db.execute("INSERT INTO coupons VALUES(1,'Loja','loja','SAVE','save',NULL,'active',NULL,'2026-11-01T00:00:00+00:00')")
         migrated = Store(path)
         self.assertEqual(migrated.rows('SELECT code,links_json FROM coupons'),
                          [{'code': 'SAVE', 'links_json': '[]'}])
+        self.assertEqual(migrated.rows('SELECT first_seen_at FROM coupons'),
+                         [{'first_seen_at': '2026-11-01T00:00:00+00:00'}])
         backup = sqlite3.connect(str(path) + '.before-coupon-links.db')
         try:
             columns = {row[1] for row in backup.execute('PRAGMA table_info(coupons)')}
@@ -319,6 +336,40 @@ class AIStoreTests(unittest.TestCase):
             self.assertEqual(backup.execute('SELECT code FROM coupons').fetchone(), ('SAVE',))
         finally:
             backup.close()
+
+    def test_coupon_and_ai_item_migrations_commit_before_next_snapshot(self):
+        self.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,status,first_seen_at,updated_at)
+            VALUES('Loja','loja','SAVE','save','active','2026-11-01','2026-11-01')''')
+        self.store.execute('ALTER TABLE coupons DROP COLUMN first_seen_at')
+        self.store.execute('ALTER TABLE ai_job_items DROP COLUMN show_result')
+        migrated = Store(self.store.path)
+        self.assertEqual(migrated.rows('SELECT first_seen_at FROM coupons'),
+                         [{'first_seen_at': '2026-11-01'}])
+        self.assertIn('show_result', {row['name'] for row in migrated.rows('PRAGMA table_info(ai_job_items)')})
+
+    def test_legacy_inactive_structured_coupon_is_hidden_from_card_badge(self):
+        offer_id = self.store.ingest(-1001, 1, 'Produto e cupom SAVE', '2026-11-01', None)
+        self.store.execute('''INSERT INTO offer_extractions
+            (offer_id,product_name,coupon_code,result_json,job_id,updated_at)
+            VALUES(?,?,?,?,0,'2026-11-01')''', (offer_id, 'Produto', 'SAVE', json.dumps({
+                'product_present': True, 'product_name': 'Produto', 'coupon_code': 'SAVE',
+                'coupons': [{'store': 'Loja', 'code': 'SAVE', 'status': 'inactive'}],
+            })))
+        self.assertIsNone(self.store.feed()[0]['extraction']['coupon_code'])
+
+    def test_card_keeps_active_storeless_badge_ahead_of_identifiable_inactive_coupon(self):
+        offer_id = self.store.ingest(-1001, 1, 'Produto e cupom SAVE', '2026-11-01', None)
+        self.store.execute('''INSERT INTO offer_extractions
+            (offer_id,product_name,coupon_code,result_json,job_id,updated_at)
+            VALUES(?,?,?,?,0,'2026-11-01')''', (offer_id, 'Produto', 'SAVE', json.dumps({
+                'product_present': True, 'product_name': 'Produto', 'coupon_code': 'SAVE',
+                'coupons': [
+                    {'store': None, 'code': 'SAVE', 'status': 'active'},
+                    {'store': 'Loja', 'code': 'OLD', 'status': 'inactive'},
+                ],
+            })))
+        self.assertEqual(self.store.feed()[0]['extraction']['coupon_code'], 'SAVE')
 
     def test_legacy_extractions_add_result_json_and_preserve_backup(self):
         path = Path(self.tmp.name) / 'legacy-extractions.db'
@@ -460,6 +511,14 @@ class AIStoreTests(unittest.TestCase):
         self.store.ingest(-1001, 1, 'Offer', '2026-11-05', None)
         self.assertEqual(self.store.enqueue_ai_job(offer_ids=[1], automatic=True), (None, 0))
 
+    def test_automatic_extraction_includes_read_alerts(self):
+        self.store.execute("INSERT INTO rules(name,keywords) VALUES('Alerta','alerta')")
+        self.store.ingest(-1001, 1, 'Oferta de alerta', '2026-11-05', None)
+        self.store.mark_seen(1)
+        self.save_models()
+        _, count = self.store.enqueue_ai_job(offer_ids=[1], automatic=True)
+        self.assertEqual(count, 1)
+
     def test_album_text_is_ordered_and_extraction_clears_after_edit(self):
         for message_id, body in ((10, 'Parte um'), (11, 'Parte dois')):
             self.store.ingest(-1001, message_id, body, '2026-11-01', None,
@@ -518,35 +577,47 @@ class AIStoreTests(unittest.TestCase):
         self.store.expire_offers(now=datetime.fromisoformat(first_inactive_at) + timedelta(hours=4, seconds=1))
         self.assertEqual(self.store.rows('SELECT count(*) AS n FROM coupons'), [{'n': 0}])
 
-    def test_ai_coupon_updates_match_case_insensitive_key_and_keep_first_inactive_deadline(self):
+    def test_product_offers_do_not_update_global_coupons(self):
         self.save_models()
-
-        def extract_coupon(message_id, body, status, conditions):
-            self.store.ingest(-1001, message_id, body, '2026-11-01', None)
+        self.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,status,first_seen_at,updated_at)
+            VALUES('Loja X','loja x','SAVE','save','active','2026-11-01','2026-11-01')''')
+        original = self.store.rows('SELECT * FROM coupons')[0]
+        for message_id, status, conditions in ((1, 'inactive', None), (2, 'active', 'Mínimo R$ 50')):
+            self.store.ingest(-1001, message_id, 'Produto com cupom SAVE', '2026-11-01', None)
             job_id, _ = self.store.enqueue_ai_job(True, offer_ids=[message_id])
             self.store.claim_ai_job()
             item = self.store.claim_ai_item(job_id)
             content = self.store.ai_item_content(item)
-            result = self.store.finish_ai_item(item['id'], 'succeeded', {
+            self.store.finish_ai_item(item['id'], 'succeeded', {
                 'product_present': True, 'product_name': 'Produto', 'original_price': None,
-                'discounted_price': None, 'coupon_code': 'save',
-                'coupons': [{'store': ' Loja X ', 'code': ' SAVE ', 'conditions': conditions,
+                'discounted_price': None, 'coupon_code': 'SAVE',
+                'coupons': [{'store': 'Loja X', 'code': 'SAVE', 'conditions': conditions,
                              'status': status}],
             }, content['content_hash'])
             self.store.finish_ai_job(job_id)
-            return result
+        self.assertEqual(self.store.rows('SELECT * FROM coupons'), [original])
 
-        extract_coupon(1, 'Cupom ativo', 'active', 'Mínimo R$ 100')
-        extract_coupon(2, 'Cupom expirado', 'inactive', None)
-        first = self.store.rows('SELECT * FROM coupons')[0]
-        extract_coupon(3, 'Cupom segue expirado', 'inactive', None)
-        extract_coupon(4, 'Cupom ativo novamente', 'active', 'Mínimo R$ 50')
-        current = self.store.rows('SELECT * FROM coupons')
-        self.assertEqual(len(current), 1)
-        self.assertEqual((current[0]['status'], current[0]['conditions'], current[0]['inactive_at']),
-                         ('inactive', 'Mínimo R$ 50', first['inactive_at']))
+    def test_productless_inactive_coupon_removes_existing_catalog_entry(self):
+        self.store.ingest(-1001, 1, 'Cupom SAVE expirado', '2026-11-01', None)
+        self.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,status,first_seen_at,updated_at)
+            VALUES('Loja X','loja x','SAVE','save','active','2026-11-01','2026-11-01')''')
+        self.save_models()
+        job_id, _ = self.store.enqueue_ai_job(True)
+        self.store.claim_ai_job()
+        item = self.store.claim_ai_item(job_id)
+        content = self.store.ai_item_content(item)
+        self.store.finish_ai_item(item['id'], 'succeeded', {
+            'product_present': False, 'product_name': None, 'original_price': None,
+            'discounted_price': None, 'coupon_code': None,
+            'coupons': [{'store': 'Loja X', 'code': 'SAVE', 'conditions': None,
+                         'status': 'inactive', 'links': []}],
+        }, content['content_hash'])
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM coupons'), [{'n': 0}])
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 0}])
 
-    def test_productless_ad_without_identifiable_coupon_is_logically_deleted(self):
+    def test_productless_ad_without_identifiable_coupon_is_physically_deleted(self):
         self.store.ingest(-1001, 1, 'Cupom sem loja ou código', '2026-11-01', None)
         self.save_models()
         job_id, _ = self.store.enqueue_ai_job(True)
@@ -559,18 +630,23 @@ class AIStoreTests(unittest.TestCase):
         }
         result = self.store.finish_ai_item(item['id'], 'succeeded', extraction, content['content_hash'])
         self.assertEqual(result, 'succeeded')
-        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers WHERE deleted_at IS NULL'), [{'n': 0}])
+        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offers'), [{'n': 0}])
         self.assertEqual(self.store.feed(), [])
-        deleted = self.store.feed(deleted=True)
-        self.assertEqual(len(deleted), 1)
-        self.assertEqual(deleted[0]['extraction_data']['product_present'], False)
+        self.assertEqual(self.store.feed(deleted=True), [])
         self.assertEqual(self.store.ai_offer_extraction_status(1)['status'], 'succeeded')
-        self.assertEqual(self.store.ai_offer_extraction_status(1)['extraction'], extraction)
-        self.store.execute('UPDATE offers SET deleted_at=? WHERE id=1', ('2026-11-01T00:00:00+00:00',))
-        self.store.expire_offers(now=datetime(2026, 11, 2))
-        self.assertEqual(self.store.ai_offer_extraction_status(1), {'status': 'succeeded', 'extraction': None})
-        self.assertIsNone(self.store.rows('SELECT result_json FROM ai_job_items')[0]['result_json'])
-        self.assertEqual(self.store.rows('SELECT count(*) AS n FROM offer_extractions'), [{'n': 0}])
+        self.assertIsNone(self.store.ai_offer_extraction_status(1)['extraction'])
+
+    def test_active_coupon_expires_from_first_detection(self):
+        from datetime import timezone
+        self.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,status,first_seen_at,updated_at)
+            VALUES('Loja X','loja x','OLD','old','active','2026-11-01T00:00:00+00:00','2026-11-01')''')
+        self.store.execute('''INSERT INTO coupons
+            (store,store_key,code,code_key,status,first_seen_at,updated_at)
+            VALUES('Loja X','loja x','NEW','new','active','2026-11-19T10:00:00+00:00','2026-11-19')''')
+        self.store.expire_offers(datetime(2026, 11, 19, 13, tzinfo=timezone.utc))
+        rows = {row['code']: row['status'] for row in self.store.rows('SELECT code,status FROM coupons')}
+        self.assertEqual(rows, {'OLD': 'inactive', 'NEW': 'active'})
 
     def test_legacy_description_is_ignored_without_destroying_existing_schema(self):
         self.store.ingest(-1001, 1, 'Oferta original', '2026-11-01', None)

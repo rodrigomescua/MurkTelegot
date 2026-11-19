@@ -1,4 +1,3 @@
-import json
 import os
 import socket
 import subprocess
@@ -15,12 +14,16 @@ os.chdir(ROOT)
 with tempfile.TemporaryDirectory() as directory:
     env = dict(os.environ, DATA_DIR=directory, APP_PASSWORD='test-password-long-enough', TELEGRAM_API_ID='', TELEGRAM_API_HASH='')
     setup = """import os
+from datetime import UTC, datetime
 from app.store import Store
 s = Store(os.path.join(os.environ['DATA_DIR'], 'offers.db'))
 s.execute('INSERT INTO chats VALUES(?,?)', (1, 'Grupo teste'))
 s.execute('INSERT INTO rules(id,name,keywords) VALUES(1,?,?)', ('Alerta PS5', 'ps5'))
+date = datetime.now(UTC).isoformat()
 for number in range(1, 22):
-    s.ingest(1, number, f'Cafeteira premium PS5 oferta sintética {number}', '2026-11-04T12:00:00', None)
+    s.ingest(1, number, f'Cafeteira premium PS5 oferta sintética {number}', date, None)
+for number in (22, 23):
+    s.ingest(1, number, f'Cafeteira premium oferta sintética {number}', date, None)
 """
     subprocess.run([sys.executable, '-c', setup], env=env, check=True)
     with socket.socket() as sock:
@@ -40,54 +43,33 @@ for number in range(1, 22):
             page.locator('#panel-password').fill('test-password-long-enough')
             page.get_by_role('button', name='Entrar').tap()
             page.wait_for_url(f'http://127.0.0.1:{port}/')
+            assert page.locator('.offer-card').count() == 2
             page.goto(f'http://127.0.0.1:{port}/alerts')
             unread_cards = page.locator('section[aria-labelledby="unread-title"] .offer-card')
-            read_cards = page.locator('section[aria-labelledby="read-title"] .offer-card')
             unread_card = unread_cards.first
             card_id = unread_card.get_attribute('id')
-            unread_card = page.locator(f'#{card_id}')
             unread_card.locator('[data-mark-seen] button').tap()
-            unread_card.get_by_text('Alerta marcado como lido.').wait_for()
-            assert unread_card.get_attribute('id') == card_id
-            assert read_cards.last.get_attribute('id') == card_id
-            assert unread_cards.count() == 20
-            assert page.locator('[data-global-undo]').count() == 1
-            assert page.locator('[data-global-undo]').is_visible()
-            other_card = unread_cards.first
-            other_id = other_card.get_attribute('id')
-            other_card = page.locator(f'#{other_id}')
-            other_card.locator('[data-mark-seen] button').tap()
-            other_card.locator('.offer-action-overlay').wait_for(state='visible')
-            assert page.locator('[data-global-undo]').evaluate('(el) => el.dataset.card') == f'#{other_id}'
-            page.locator('[data-global-undo]').tap()
-            other_card.locator('.offer-action-overlay').wait_for(state='hidden')
-            assert unread_card.locator('.offer-action-overlay').is_visible()
-            unread_card.get_by_role('button', name='Desfazer').tap()
-            unread_card.locator('.offer-action-overlay').wait_for(state='hidden')
-            assert unread_cards.first.get_attribute('id') == card_id
-            unread_card.locator('[data-mark-seen] button').tap()
-            unread_card.locator('.offer-action-overlay').wait_for(state='visible')
-            page.wait_for_timeout(5100)
+            read_card = page.locator(f'section[aria-labelledby="read-title"] #{card_id}')
+            delete_button = read_card.get_by_role('button', name='Excluir oferta')
+            delete_button.wait_for()
+            assert read_card.get_by_text('Lido · Alerta PS5', exact=True).is_visible()
+            assert read_card.locator('.offer-action-overlay').is_hidden()
+            assert read_card.get_by_role('button', name='Desfazer').is_hidden()
             assert page.locator('[data-global-undo]').is_hidden()
-            assert unread_card.get_by_role('button', name='Desfazer').is_visible()
-            unread_card.get_by_role('button', name='Desfazer').tap()
-            unread_card.locator('.offer-action-overlay').wait_for(state='hidden')
-            unread_card.locator('[data-mark-seen] button').tap()
-            unread_card.locator('.offer-action-overlay').wait_for(state='visible')
-            page.reload()
-            read_cards = page.locator('section[aria-labelledby="read-title"] .offer-card')
-            assert read_cards.count() == 1
-            read_card = read_cards.first
-            card_id = read_card.get_attribute('id')
-            csrf = read_card.locator('[data-delete-offer] input[name="csrf"]').get_attribute('value')
-            read_card.locator('[data-delete-offer] button').tap()
+            assert unread_cards.count() == 20
+            delete_button.tap()
             read_card.get_by_text('Oferta excluída.').wait_for()
             assert page.locator('[data-global-undo]').is_visible()
             page.locator('[data-global-undo]').tap()
             read_card.locator('.offer-action-overlay').wait_for(state='hidden')
-            read_card.locator('[data-delete-offer] button').tap()
             page.reload()
-            assert page.locator(f'section[aria-labelledby="read-title"] #{card_id}').count() == 0
+            assert delete_button.is_visible()
+            assert read_card.get_by_text('Lido · Alerta PS5', exact=True).is_visible()
+            csrf = read_card.locator('[data-delete-offer] input[name="csrf"]').get_attribute('value')
+            delete_button.tap()
+            read_card.get_by_text('Oferta excluída.').wait_for()
+            page.reload()
+            assert read_card.count() == 0
             restored = page.request.post(f'http://127.0.0.1:{port}/offers/{card_id.removeprefix("offer-")}/delete/undo',
                                          form={'csrf': csrf})
             assert restored.ok
@@ -103,7 +85,7 @@ for number in range(1, 22):
             trigger.tap()
             page.wait_for_url('**/?q=cafeteira')
             assert page.locator('.term-offers-modal').count() == 0
-            assert page.locator('.offer-card').count() > 0
+            assert page.locator('.offer-card').count() == 2
 
             # Sem JavaScript, o mesmo link abre a Home com o termo como filtro.
             fallback_context = browser.new_context(viewport={'width': 390, 'height': 844}, java_script_enabled=False)
@@ -117,12 +99,11 @@ for number in range(1, 22):
             nojs.wait_for_url('**/terms')
             nojs.get_by_role('link', name='Ver ofertas com cafeteira', exact=True).click()
             nojs.wait_for_url('**/?q=cafeteira')
-            assert nojs.locator('.offer-card').count() > 0
+            assert nojs.locator('.offer-card').count() == 2
             fallback_context.close()
 
             assert not errors, errors
-            print('Chromium móvel: navegação filtrada com e sem JavaScript; sem modal de termo')
-            fallback_context.close()
+            print('Chromium móvel: alertas lidos, exclusão e desfazer; navegação filtrada com e sem JavaScript')
 
             desktop = browser.new_context(viewport={'width': 1365, 'height': 900})
             desktop_page = desktop.new_page()

@@ -118,7 +118,7 @@ class PersistenceTests(unittest.TestCase):
         store_message(self.store, message(1, 'Café', grouped=9))
         other = message(1, 'Café outro', grouped=9)
         self.store.ingest(-100456, 1, other.raw_text, other.date.isoformat(), None, source_json=other.to_json())
-        self.assertEqual(len(self.store.feed()), 2)
+        self.assertEqual(len(self.store.feed(alerts=True)), 2)
         self.store.mark_seen(1)
         self.assertEqual(self.store.unread(), 1)
 
