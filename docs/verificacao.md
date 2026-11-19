@@ -291,3 +291,9 @@ Na cópia `.data/offers.db` aberta somente para leitura, a comparação do cálc
 A revisão independente não encontrou bloqueios. A medição é local e não comprova o tempo da instância Runtipi.
 
 Release `v0.5.29`: commit de código `283983f`; CI do push `43489107846` e workflow da release `43489245307` passaram. A publicação GHCR registrou `ghcr.io/rodrigomescua/murktelegot:0.5.29`, digest `sha256:5a568a11bb00f2dd9991cdaa6d6a64e5cb8cd112c89c034720c8a2e6fdeedd9e`, para `linux/amd64`. O catálogo foi finalizado pelo PR 1509, merge `953abd2`, `tipi_version` 61; checks `test`/`renovate` passaram e CI pós-merge `43490487903` passou. Um push direto intermediário reportou bypass da regra de PR; ele foi revertido pelo PR 1508 e a atualização foi reaplicada e mergeada pelo PR 1509 com os checks exigidos. A instância Runtipi não foi atualizada.
+
+## Diagnóstico de HTTP 400 na extração GPT-6 — 2026-11-19
+
+O payload da OpenAI omite `temperature` para IDs `gpt-6*`; demais modelos/provedores mantêm o valor zero. Respostas HTTP de erro agora registram somente `type`, `code`, `param` e `x-request-id` validados e limitados; corpo livre do provedor, texto da oferta e chaves não são registrados. A linha de resultado do worker inclui o detalhe seguro da tentativa.
+
+199 testes `unittest` passaram, incluindo regressão do payload por modelo/provedor e metadados de erro com texto privado omitido. `bash -n run-dev.sh`, `node --check app/static/app.js` e `git diff --check` passaram. A chamada real à OpenAI não foi repetida; a hipótese de incompatibilidade com `temperature` ainda precisa de confirmação no ambiente atualizado.

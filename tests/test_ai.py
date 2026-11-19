@@ -40,6 +40,20 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
                 {'id': 'z-model', 'name': 'Zulu'},
             ])
 
+    async def test_gpt6_openai_request_omits_temperature_but_other_models_keep_it(self):
+        response = {'choices': [{'message': {'content': json.dumps({
+            'product_present': False, 'product_name': None, 'original_price': None,
+            'discounted_price': None, 'coupon_code': None, 'coupons': [],
+        })}}]}
+        for provider, model, has_temperature in (
+                ('openai', 'gpt-6-luna', False), ('openai', 'gpt-4.1', True),
+                ('openrouter', 'gpt-6-luna', True)):
+            with self.subTest(provider=provider, model=model), patch(
+                    'app.ai.request', return_value=response) as request:
+                await extract(provider, 'key', model, 'Oferta')
+                payload = request.call_args.args[3]
+                self.assertEqual('temperature' in payload, has_temperature)
+
     async def test_extraction_accepts_partial_json_and_rejects_empty_or_invalid_output(self):
         payload = {'choices': [{'message': {'content': json.dumps({
             'product_name': 'Fone', 'description': 'texto que não deve ser extraído', 'original_price': 'R$ 200',
@@ -83,13 +97,19 @@ class AIClientTests(unittest.IsolatedAsyncioTestCase):
     async def test_provider_http_errors_have_stable_failure_categories(self):
         from app.ai import request
         async def handler(_request):
-            return httpx.Response(429, json={'error': 'private provider detail'})
+            return httpx.Response(400, json={'error': {
+                'message': 'private provider detail', 'type': 'invalid_request_error',
+                'code': 'unsupported_parameter', 'param': 'temperature',
+            }}, headers={'x-request-id': 'req_safe-123'})
         client_class = httpx.AsyncClient
         with patch('app.ai.httpx.AsyncClient', side_effect=lambda **kwargs:
                    client_class(transport=httpx.MockTransport(handler), **kwargs)):
             with self.assertRaises(AIError) as raised:
                 await request('openai', 'key', '/models')
-        self.assertEqual(raised.exception.failure_type, 'rate_limit')
+        self.assertEqual(raised.exception.failure_type, 'provider_request')
+        self.assertIn('code=unsupported_parameter', str(raised.exception))
+        self.assertIn('param=temperature', str(raised.exception))
+        self.assertIn('request_id=req_safe-123', str(raised.exception))
         self.assertNotIn('private provider detail', str(raised.exception))
 
 

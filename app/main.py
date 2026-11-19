@@ -234,9 +234,9 @@ async def process_ai_job(job):
                                          model['provider'], model['id'], outcome, detail,
                                          int((time.monotonic() - started) * 1000), failure_type)
                 logging.getLogger(__name__).info(
-                    'Job de IA %s item %s modelo %s/%s resultado=%s tipo=%s duração_ms=%s',
+                    'Job de IA %s item %s modelo %s/%s resultado=%s tipo=%s duração_ms=%s detalhe=%s',
                     job['id'], item['id'], model['provider'], model['id'], outcome,
-                    failure_type or '-', int((time.monotonic() - started) * 1000))
+                    failure_type or '-', int((time.monotonic() - started) * 1000), detail)
                 had_failure = had_failure or outcome == 'failed'
                 if outcome == 'failed' and await asyncio.to_thread(store.ai_job_cancel_requested, job['id']):
                     await asyncio.to_thread(store.finish_ai_item, item['id'], 'cancelled')
