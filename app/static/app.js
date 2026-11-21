@@ -329,6 +329,7 @@ async function handleOfferCardSubmit(event) {
     if (!response.ok || !result.ok) throw new Error(result.message || 'Não foi possível atualizar o alerta. Tente novamente.');
     updateUnreadCounter(result.unread);
     if (action === 'seen') {
+      const scrollPosition = window.scrollY;
       const unread = card.closest('[data-alert-section="unread"]');
       const read = document.querySelector('[data-alert-section="read"]');
       form.removeAttribute('data-mark-seen');
@@ -343,7 +344,8 @@ async function handleOfferCardSubmit(event) {
       read.querySelector('[data-alert-grid]').append(card);
       updateAlertSection(unread, Math.max(0, Number(unread.querySelector('[data-alert-count]').textContent) - 1));
       updateAlertSection(read, Number(read.querySelector('[data-alert-count]').textContent) + 1);
-      card.querySelector('.offer-open')?.focus();
+      card.querySelector('.offer-open')?.focus({preventScroll: true});
+      window.scrollTo(0, scrollPosition);
       return;
     }
     const overlay = card.querySelector('.offer-action-overlay');

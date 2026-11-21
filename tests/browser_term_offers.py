@@ -48,10 +48,14 @@ for number in (22, 23):
             unread_cards = page.locator('section[aria-labelledby="unread-title"] .offer-card')
             unread_card = unread_cards.first
             card_id = unread_card.get_attribute('id')
-            unread_card.locator('[data-mark-seen] button').tap()
+            page.evaluate('window.scrollTo(0, 700)')
+            scroll_before = page.evaluate('window.scrollY')
+            unread_card.locator('[data-mark-seen] button').evaluate('(button) => button.click()')
             read_card = page.locator(f'section[aria-labelledby="read-title"] #{card_id}')
             delete_button = read_card.get_by_role('button', name='Excluir oferta')
             delete_button.wait_for()
+            assert page.evaluate('window.scrollY') == scroll_before
+            assert read_card.locator('.offer-open').evaluate('(button) => document.activeElement === button')
             assert read_card.get_by_text('Lido · Alerta PS5', exact=True).is_visible()
             assert read_card.locator('.offer-action-overlay').is_hidden()
             assert read_card.get_by_role('button', name='Desfazer').is_hidden()
