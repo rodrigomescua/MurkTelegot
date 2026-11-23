@@ -577,7 +577,10 @@ class Store:
             db.execute('''INSERT INTO settings(key,value) VALUES('ai_prompt_extra',?)
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value''', (prompt_extra.strip(),))
 
-    def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False, show_result=False):
+    def enqueue_ai_job(self, replace_existing=False, *, offer_ids=None, automatic=False, show_result=False,
+                       only_offer_ids=False):
+        if only_offer_ids and (not automatic or not offer_ids or len(offer_ids) != 1):
+            raise ValueError('O enfileiramento automático direcionado exige exatamente uma oferta.')
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             settings = {row['key']: row['value'] for row in db.execute(
@@ -596,7 +599,7 @@ class Store:
                 if automatic:
                     return None, 0
                 raise ValueError('Configure as chaves dos provedores selecionados antes de iniciar o processamento.')
-            cards = self.feed('', False, db, offer_ids=offer_ids if not automatic else None,
+            cards = self.feed('', False, db, offer_ids=offer_ids if not automatic or only_offer_ids else None,
                               include_alerts=automatic)
             if offer_ids is not None:
                 cards = [card for card in cards if card['id'] in offer_ids]
@@ -607,7 +610,27 @@ class Store:
                     raise ValueError('Esta oferta já tem uma extração pendente.')
             if not replace_existing or automatic:
                 cards = [card for card in cards if not card.get('extraction')]
-            if automatic:
+            if automatic and only_offer_ids and cards:
+                card = cards[0]
+                pending = db.execute('''SELECT i.job_id,i.status,j.status AS job_status
+                    FROM ai_job_items i JOIN ai_jobs j ON j.id=i.job_id
+                    WHERE i.offer_id=? AND i.status IN ('queued','processing')
+                      AND j.status IN ('queued','running','cancelling')
+                    ORDER BY j.queue_at,j.id''', (card['id'],)).fetchall()
+                if any(item['status'] == 'queued' for item in pending):
+                    return None, 0
+                processing = next((item for item in pending
+                                   if item['status'] == 'processing' and item['job_status'] == 'running'), None)
+                if processing:
+                    position = db.execute('SELECT coalesce(max(position),-1)+1 FROM ai_job_items WHERE job_id=?',
+                                          (processing['job_id'],)).fetchone()[0]
+                    db.execute('''INSERT INTO ai_job_items(job_id,position,offer_id,chat_id,message_id)
+                        VALUES(?,?,?,?,?)''', (processing['job_id'], position, card['id'], card['chat_id'],
+                                               card['message_id']))
+                    return processing['job_id'], 1
+                if any(item['status'] == 'processing' for item in pending):
+                    return None, 0
+            elif automatic:
                 cards = [card for card in cards if not db.execute('''SELECT 1 FROM ai_job_items i
                     JOIN ai_jobs j ON j.id=i.job_id WHERE i.offer_id=? AND j.status IN ('queued','running','cancelling')
                     AND i.status IN ('queued','processing') LIMIT 1''', (card['id'],)).fetchone()]
@@ -1642,7 +1665,7 @@ class Store:
                 AND NOT EXISTS (SELECT 1 FROM offers a JOIN hits h ON h.offer_id=a.id
                     WHERE a.chat_id=o.chat_id AND ((o.grouped_id IS NULL AND a.id=o.id)
                       OR (o.grouped_id IS NOT NULL AND a.grouped_id=o.grouped_id)))))''', []
-        elif offer_ids is not None:
+        elif offer_ids is not None and not include_alerts:
             where, args = 'WHERE o.deleted_at IS NULL', []
         else:
             where, args = self.feed_filter(q, alerts, include_alerts)

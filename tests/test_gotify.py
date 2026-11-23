@@ -272,6 +272,78 @@ class GotifyEventTests(unittest.IsolatedAsyncioTestCase):
             album = store.feed()[0]
             self.assertEqual([part['body'] for part in album['parts']], ['parte A', 'parte B'])
 
+    async def test_edit_queues_only_the_changed_offer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.save_ai_settings('test-key', '', [{'provider': 'openai', 'id': 'a'}])
+            for message_id, body in ((1, 'Cupom em oferta'), (2, 'Outra oferta')):
+                store.ingest(1, message_id, body, '2026-11-23', None)
+            store.execute('''INSERT INTO offer_extractions
+                (offer_id,product_name,original_price,discounted_price,coupon_code,result_json,job_id,updated_at)
+                VALUES(1,'Cupom',NULL,NULL,NULL,?,0,'now')''',
+                          (json.dumps({'product_present': True, 'product_name': 'Cupom'}),))
+            telegram = Telegram(store, Path(directory), None, None)
+            message = SimpleNamespace(
+                id=1, raw_text='Cupom atualizado em oferta', date=datetime.now(timezone.utc), grouped_id=None,
+                to_json=lambda: json.dumps({'grouped_id': None, 'edit_date': '2026-11-23'}),
+            )
+
+            await telegram.receive_edit(SimpleNamespace(chat_id=1, message=message))
+            await telegram.receive_edit(SimpleNamespace(chat_id=1, message=message))
+
+            self.assertEqual(store.rows('SELECT offer_id FROM ai_job_items'), [{'offer_id': 1}])
+            self.assertEqual(store.rows('SELECT offer_id FROM offer_extractions'), [])
+            self.assertEqual(store.ai_offer_extraction_status(1)['status'], 'queued')
+
+    async def test_edited_ignored_offer_without_alert_is_not_queued(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.save_ai_settings('test-key', '', [{'provider': 'openai', 'id': 'a'}])
+            store.add_ignored('ignorado')
+            store.ingest(1, 1, 'Oferta ignorado', '2026-11-23', None)
+
+            job_id, count = store.enqueue_ai_job(offer_ids=[1], automatic=True, only_offer_ids=True)
+
+            self.assertIsNone(job_id)
+            self.assertEqual(count, 0)
+            self.assertEqual(store.rows('SELECT * FROM ai_jobs'), [])
+
+    async def test_edit_during_album_extraction_queues_followup_for_latest_album_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / 'db.sqlite')
+            store.execute('INSERT INTO chats VALUES(1,?)', ('Grupo',))
+            store.save_ai_settings('test-key', '', [{'provider': 'openai', 'id': 'a'}])
+            for message_id, body in ((10, 'Parte um'), (11, 'Parte dois'), (20, 'Outra oferta')):
+                group = 77 if message_id < 20 else None
+                store.ingest(1, message_id, body, '2026-11-23', None,
+                             source_json=json.dumps({'grouped_id': group}))
+            store.execute('''INSERT INTO offer_extractions
+                (offer_id,product_name,original_price,discounted_price,coupon_code,result_json,job_id,updated_at)
+                VALUES(1,'Produto',NULL,NULL,NULL,?,0,'now')''',
+                          (json.dumps({'product_present': True, 'product_name': 'Produto'}),))
+            job_id, _ = store.enqueue_ai_job(True, offer_ids=[1])
+            store.claim_ai_job()
+            active_item = store.claim_ai_item(job_id)
+            old_content = store.ai_item_content(active_item)
+            telegram = Telegram(store, Path(directory), None, None)
+            edited = SimpleNamespace(
+                id=11, raw_text='Parte dois editada', date=datetime.now(timezone.utc), grouped_id=77,
+                to_json=lambda: json.dumps({'grouped_id': 77, 'edit_date': '2026-11-23'}),
+            )
+
+            await telegram.receive_edit(SimpleNamespace(chat_id=1, message=edited))
+
+            self.assertEqual(store.rows('SELECT offer_id,status FROM ai_job_items ORDER BY id'), [
+                {'offer_id': 1, 'status': 'processing'}, {'offer_id': 1, 'status': 'queued'}
+            ])
+            stale = {'product_present': True, 'product_name': 'Old extraction', 'coupons': []}
+            self.assertEqual(store.finish_ai_item(active_item['id'], 'succeeded', stale,
+                                                  old_content['content_hash']), 'stale')
+            followup = store.claim_ai_item(job_id)
+            self.assertEqual(store.ai_item_content(followup)['text'], 'Parte um\n\nParte dois editada')
+
     async def test_album_notification_uses_image_from_any_non_spoiler_part(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory) / 'db.sqlite')

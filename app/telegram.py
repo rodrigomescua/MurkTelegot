@@ -115,8 +115,10 @@ class Telegram:
             await self.notify_alert(result[1] if result else None)
             if auto_extract and result:
                 await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[result[0]], automatic=True)
+            return result
         except Exception:
             log.warning('Failed to store a Telegram message; private content omitted from logs')
+            return None
 
     async def receive_album(self, event):
         try:
@@ -150,7 +152,22 @@ class Telegram:
             log.warning('Failed to store a Telegram album; private content omitted from logs')
 
     async def receive_edit(self, event):
-        await self.receive(event, auto_extract=False)
+        result = await self.receive(event, auto_extract=False)
+        if not result:
+            return
+        try:
+            offer_id = result[0]
+            grouped_id = getattr(event.message, 'grouped_id', None)
+            if grouped_id is not None:
+                root = self.store.rows('''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
+                    ORDER BY message_id LIMIT 1''', (event.chat_id, str(grouped_id)))
+                if not root:
+                    return
+                offer_id = root[0]['id']
+            await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[offer_id], automatic=True,
+                                    only_offer_ids=True)
+        except Exception:
+            log.warning('Failed to enqueue AI extraction for an edited Telegram message; private content omitted')
 
     async def notify_alert(self, alert):
         if not alert:
