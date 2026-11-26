@@ -676,7 +676,6 @@ updateTermSelection();
 async function refreshTerms() {
   if (!termsContent) return;
   const selected = new Set([...termsContent.querySelectorAll('input[name="words"]:checked')].map((box) => box.value));
-  const opened = document.querySelector('#hidden-terms').open;
   const response = await fetch(`/terms?page=${encodeURIComponent(termsContent.dataset.page)}`, {credentials: 'same-origin'});
   if (!response.ok || response.redirected) throw new Error();
   const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
@@ -684,7 +683,6 @@ async function refreshTerms() {
   if (!next) throw new Error();
   termsContent.innerHTML = next.innerHTML;
   termsContent.dataset.page = next.dataset.page;
-  document.querySelector('#hidden-terms').open = opened;
   termsContent.querySelectorAll('input[name="words"]').forEach((box) => { box.checked = selected.has(box.value); });
   updateTermSelection();
 }

@@ -44,7 +44,6 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             assert page.evaluate('window.testSentinel') == 123
             page.goto(f'http://127.0.0.1:{port}/alerts')
             page.locator('.offer-card').filter(has_text='Nintendo Switch em oferta').first.wait_for()
-            page.goto(f'http://127.0.0.1:{port}/')
             card=page.locator('.offer-card').filter(has_text='Nintendo')
             status_calls = [0]
             def extraction_status(route):
@@ -86,6 +85,7 @@ s.ingest(1,2,'Notebook segredo',date,None,source_json=json.dumps({'entities':[{'
             page.locator('.offer-modal .modal-close').tap()
             page.reload()
             page.locator('.offer-card').filter(has_text='Nintendo').wait_for(state='visible')
+            page.goto(f'http://127.0.0.1:{port}/')
             page.locator('.offer-card').filter(has_text='Notebook').locator('.offer-open').tap()
             text=page.locator('.offer-modal .message-text')
             text.evaluate('''el => {const r=document.createRange();r.selectNodeContents(el);const s=window.getSelection();s.removeAllRanges();s.addRange(r)}''')
