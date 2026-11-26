@@ -776,7 +776,22 @@ def terms_page(request: Request, page: int = 1, notice: str = ''):
     return templates.TemplateResponse(request, 'terms.html', {
         'csrf': csrf_token, 'notice': notice, 'terms': terms[(page - 1) * 50:page * 50],
         'page': page, 'pages': pages, 'total': len(terms),
-        'hidden_terms': store.rows('SELECT id,word FROM hidden_suggestions ORDER BY word COLLATE NOCASE'),
+        'hidden_total': store.rows('SELECT COUNT(*) AS n FROM hidden_suggestions')[0]['n'],
+    })
+
+
+@app.get('/terms/hidden', dependencies=[Depends(authenticate)])
+def hidden_terms_page(request: Request, page: int = 1, notice: str = ''):
+    if page < 1:
+        raise HTTPException(400, 'Página inválida.')
+    total = store.rows('SELECT COUNT(*) AS n FROM hidden_suggestions')[0]['n']
+    pages = max(1, (total + 24) // 25)
+    page = min(page, pages)
+    terms = store.rows('SELECT id,word FROM hidden_suggestions ORDER BY word COLLATE NOCASE LIMIT 25 OFFSET ?',
+                       ((page - 1) * 25,))
+    return templates.TemplateResponse(request, 'hidden_terms.html', {
+        'csrf': csrf_token, 'notice': notice, 'terms': terms,
+        'page': page, 'pages': pages, 'total': total,
     })
 
 
@@ -839,7 +854,10 @@ def term_action(request: Request, action: str, word: str = Form(..., max_length=
 @app.post('/terms/restore/{term_id}', dependencies=[Depends(authenticate), Depends(csrf)])
 def restore_term(request: Request, term_id: int, page: int = Form(1)):
     store.execute('DELETE FROM hidden_suggestions WHERE id=?', (term_id,))
-    return term_reply(request, 'Sugestão restaurada.', page)
+    if 'application/json' in request.headers.get('accept', ''):
+        return {'ok': True, 'message': 'Sugestão restaurada.'}
+    from urllib.parse import urlencode
+    return RedirectResponse('/terms/hidden?' + urlencode({'page': max(1, page), 'notice': 'Sugestão restaurada.'}), status_code=303)
 
 
 @app.post('/offers/{offer_id}/seen', dependencies=[Depends(authenticate), Depends(csrf)])

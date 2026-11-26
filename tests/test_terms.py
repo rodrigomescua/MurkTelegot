@@ -208,20 +208,45 @@ class FrequentTermsTests(unittest.TestCase):
             self.addCleanup(main.sessions.pop, token, None)
             cookies = {'panel_session': token}
             self.assertEqual(client.get('/terms', follow_redirects=False).status_code, 303)
+            self.assertEqual(client.get('/terms/hidden', follow_redirects=False).status_code, 303)
             page = client.get('/terms', cookies=cookies)
             self.assertIn('promoção', page.text)
             self.assertIn('2 ofertas', page.text)
             self.assertIn('name="auto_delete" value="true"', page.text)
             self.assertNotIn('álbum', page.text.lower())
+            self.store.hide_suggestion('termo secreto')
+            self.assertNotIn('termo secreto', client.get('/terms', cookies=cookies).text)
+            self.assertIn('termo secreto', client.get('/terms/hidden', cookies=cookies).text)
+            self.store.execute("DELETE FROM hidden_suggestions WHERE normalized=?", ('termo secreto',))
             self.assertEqual(client.post('/terms/hide', cookies=cookies, data={'word': 'promoção'}).status_code, 403)
             headers = {'Accept': 'application/json'}
             data = {'csrf': main.csrf_token, 'word': 'promoção'}
             self.assertTrue(client.post('/terms/hide', cookies=cookies, data=data, headers=headers).json()['ok'])
             self.assertEqual(len(self.store.feed()), 2)
             self.assertEqual(self.store.unread(), 0)
+            terms_after_hide = client.get('/terms', cookies=cookies)
+            self.assertNotIn('>promoção</strong>', terms_after_hide.text)
+            hidden_page = client.get('/terms/hidden', cookies=cookies)
+            self.assertIn('promoção', hidden_page.text)
             hidden_id = self.store.rows('SELECT id FROM hidden_suggestions')[0]['id']
+            self.assertEqual(client.post(f'/terms/restore/{hidden_id}', cookies=cookies,
+                                         data={'page': 1}).status_code, 403)
             self.assertTrue(client.post(f'/terms/restore/{hidden_id}', cookies=cookies, data={'csrf': main.csrf_token}, headers=headers).json()['ok'])
             self.assertEqual(self.store.rows('SELECT * FROM hidden_suggestions'), [])
+            for index in range(26):
+                self.store.hide_suggestion(f'termo oculto {index:02d}')
+            hidden_page = client.get('/terms/hidden', cookies=cookies)
+            self.assertIn('Página 1 de 2', hidden_page.text)
+            self.assertEqual(hidden_page.text.count('Restaurar sugestão termo oculto'), 25)
+            last_hidden_page = client.get('/terms/hidden?page=2', cookies=cookies)
+            self.assertIn('Página 2 de 2', last_hidden_page.text)
+            self.assertEqual(last_hidden_page.text.count('Restaurar sugestão termo oculto'), 1)
+            restore_id = self.store.rows("SELECT id FROM hidden_suggestions WHERE word='termo oculto 00'")[0]['id']
+            restore = client.post(f'/terms/restore/{restore_id}', cookies=cookies,
+                                  data={'csrf': main.csrf_token, 'page': 2}, follow_redirects=False)
+            self.assertEqual(restore.status_code, 303)
+            self.assertIn('/terms/hidden?page=2', restore.headers['location'])
+            self.assertEqual(self.store.rows('SELECT id FROM hidden_suggestions WHERE id=?', (restore_id,)), [])
             result = client.post('/terms/ignore', cookies=cookies,
                                  data={'csrf': main.csrf_token, 'word': 'promoção', 'auto_delete': 'true'},
                                  follow_redirects=False)
