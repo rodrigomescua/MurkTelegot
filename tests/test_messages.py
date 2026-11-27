@@ -189,6 +189,26 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         self.offer = self.store.rows('SELECT * FROM offers')[0]
         self.telegram.client.get_messages.return_value = self.msg
 
+    async def test_receive_keeps_loop_responsive_and_serializes_ingestion(self):
+        import time
+        original = self.store.ingest
+        order = []
+
+        def slow_ingest(chat_id, message_id, *args, **kwargs):
+            order.append(message_id)
+            time.sleep(0.1)
+            return original(chat_id, message_id, *args, **kwargs)
+
+        self.store.ingest = slow_ingest
+        events = [SimpleNamespace(chat_id=-100123, message=message(i, f'Oferta {i}', photo=False))
+                  for i in (10, 11)]
+        heartbeat = asyncio.create_task(asyncio.sleep(0.01))
+        await asyncio.gather(*(self.telegram.receive(event) for event in events), heartbeat)
+        self.assertTrue(heartbeat.done())
+        self.assertEqual(order, [10, 11])
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers WHERE message_id>=10 ORDER BY message_id'),
+                         [{'message_id': 10}, {'message_id': 11}])
+
     async def test_cache_atomic_download_and_offline_reuse(self):
         async def download(msg, *, file, **kwargs):
             file.write(b'fake-photo')

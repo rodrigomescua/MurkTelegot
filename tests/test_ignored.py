@@ -125,6 +125,18 @@ class IgnoredWordsTests(unittest.TestCase):
         self.add_offer(2, 'xps5pro continua oculto')
         self.assertEqual([row['message_id'] for row in self.store.feed()], [])
 
+    def test_auto_delete_matcher_cache_tracks_rule_content_and_toggle(self):
+        self.store.add_ignored('CacheTarget', auto_delete=True)
+        self.assertIsNone(self.store.ingest(-100123, 1, 'CacheTarget', '2026-11-04', None))
+        word_id = self.store.rows('SELECT id FROM ignored_keywords')[0]['id']
+        self.store.set_ignored_auto_delete(word_id, False)
+        visible = self.store.ingest(-100123, 1, 'CacheTarget', '2026-11-04', None)
+        self.assertIsNotNone(visible)
+        self.store.set_ignored_auto_delete(word_id, True)
+        self.assertIsNone(self.store.ingest(-100123, 2, 'CacheTarget', '2026-11-04', None))
+        self.store.remove_ignored(word_id)
+        self.assertIsNotNone(self.store.ingest(-100123, 3, 'CacheTarget', '2026-11-04', None))
+
     def test_ignored_timestamp_backfills_new_match_and_preserves_overlapping_rules(self):
         self.add_offer(1, 'Oferta PS5 Slim e Xbox Series')
         self.assertTrue(self.store.add_ignored('PS5 Slim'))

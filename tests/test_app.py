@@ -5,9 +5,11 @@ import hashlib
 import hmac
 import tempfile
 import sqlite3
+import threading
 import unittest
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.store import Store, matches
@@ -220,6 +222,32 @@ class WebTests(unittest.TestCase):
 
     def post(self, url, data=None):
         return self.client.post(url, cookies=self.auth, data={'csrf': main.csrf_token, **(data or {})})
+
+    def test_offer_delete_sqlite_wait_does_not_block_async_loop(self):
+        import asyncio
+
+        started = threading.Event()
+        finished = threading.Event()
+
+        def slow_delete(_offer_id):
+            started.set()
+            time.sleep(0.1)
+            finished.set()
+            return True
+
+        async def run():
+            with patch.object(main.store, 'delete_offer', side_effect=slow_delete), \
+                    patch.object(main.store, 'unread', return_value=0):
+                task = asyncio.create_task(main.delete_offer(
+                    SimpleNamespace(headers={'accept': 'application/json'}), 123))
+                await asyncio.sleep(0.01)
+                self.assertTrue(started.is_set())
+                self.assertFalse(finished.is_set())
+                return await task
+
+        self.assertEqual(asyncio.run(run()), {
+            'ok': True, 'message': 'Oferta excluída.', 'unread': 0,
+        })
 
     def test_auth_csrf_and_dashboard(self):
         self.assertEqual(self.client.get('/', follow_redirects=False).status_code, 303)

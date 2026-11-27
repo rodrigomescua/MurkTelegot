@@ -42,3 +42,7 @@ Na cópia pessoal `.data/offers.db`, consultada em modo somente leitura, havia 4
 ## Exclusão de regra de alerta
 
 A causa medida na cópia `.data` e as limitações estão em [delete_alert_rule.md](delete_alert_rule.md). A investigação foi somente leitura e não mediu a requisição HTTP completa.
+
+## Exclusão de oferta
+
+A espera no handler, a contenção SQLite e o custo sintético de ingestão estão em [delete_offer_latency.md](delete_offer_latency.md), com reprodução que usa apenas bancos temporários.

@@ -23,6 +23,7 @@ class Telegram:
         self.media_dir = Path(data_dir) / 'media'
         self.media_slots = asyncio.Semaphore(2)
         self.notification_slots = asyncio.Semaphore(4)
+        self.ingest_lock = asyncio.Lock()
         self.client = TelegramClient(str(data_dir / 'telegram'), int(api_id), api_hash) if api_id and api_hash else None
         self.phone = None
         self.code_hash = None
@@ -104,14 +105,23 @@ class Telegram:
                                  message.date.isoformat(), message_link(chat_id, message.id),
                                  source_json=json.dumps(source), report_alert=report_alert)
 
+    async def _save_message(self, chat_id, message, *, report_alert=False):
+        started = time.monotonic()
+        result = await asyncio.to_thread(self.save_message, chat_id, message, report_alert=report_alert)
+        elapsed = time.monotonic() - started
+        if elapsed >= 0.5:
+            log.warning('Telegram message ingestion took %.3fs', elapsed)
+        return result
+
     async def receive(self, event, auto_extract=True):
         try:
-            # Only selected chats are stored; private conversations never enter the database.
-            if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
-                return
-            if auto_extract and getattr(event.message, 'grouped_id', None) is not None:
-                return
-            result = self.save_message(event.chat_id, event.message, report_alert=True)
+            async with self.ingest_lock:
+                # Only selected chats are stored; private conversations never enter the database.
+                if not await asyncio.to_thread(self.store.rows, 'SELECT id FROM chats WHERE id=?', (event.chat_id,)):
+                    return
+                if auto_extract and getattr(event.message, 'grouped_id', None) is not None:
+                    return
+                result = await self._save_message(event.chat_id, event.message, report_alert=True)
             await self.notify_alert(result[1] if result else None)
             if auto_extract and result:
                 await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[result[0]], automatic=True)
@@ -122,30 +132,32 @@ class Telegram:
 
     async def receive_album(self, event):
         try:
-            if not self.store.rows('SELECT id FROM chats WHERE id=?', (event.chat_id,)):
-                return
-            messages = list(event.messages)
-            if self.store.auto_delete_album(event.chat_id, event.grouped_id,
-                                            [message.raw_text or '' for message in messages]):
-                return
-            offer_ids = []
-            alerts = []
-            auto_deleted = False
-            for message in messages:
-                result = self.save_message(event.chat_id, message, report_alert=True)
-                if result is None and self.store.auto_delete_album(
-                        event.chat_id, event.grouped_id, [part.raw_text or '' for part in messages]):
-                    auto_deleted = True
-                    break
-                if result:
-                    offer_ids.append(result[0])
-                    if result[1]:
-                        alerts.append(result[1])
+            async with self.ingest_lock:
+                if not await asyncio.to_thread(self.store.rows, 'SELECT id FROM chats WHERE id=?', (event.chat_id,)):
+                    return
+                messages = list(event.messages)
+                bodies = [message.raw_text or '' for message in messages]
+                if await asyncio.to_thread(self.store.auto_delete_album, event.chat_id, event.grouped_id, bodies):
+                    return
+                offer_ids = []
+                alerts = []
+                auto_deleted = False
+                for message in messages:
+                    result = await self._save_message(event.chat_id, message, report_alert=True)
+                    if result is None and await asyncio.to_thread(
+                            self.store.auto_delete_album, event.chat_id, event.grouped_id, bodies):
+                        auto_deleted = True
+                        break
+                    if result:
+                        offer_ids.append(result[0])
+                        if result[1]:
+                            alerts.append(result[1])
+                if offer_ids and not auto_deleted:
+                    root = await asyncio.to_thread(self.store.rows, '''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
+                        ORDER BY message_id LIMIT 1''', (event.chat_id, str(event.grouped_id)))
             if offer_ids and not auto_deleted:
                 for alert in alerts:
                     await self.notify_alert(alert)
-                root = self.store.rows('''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
-                    ORDER BY message_id LIMIT 1''', (event.chat_id, str(event.grouped_id)))
                 if root:
                     await asyncio.to_thread(self.store.enqueue_ai_job, offer_ids=[root[0]['id']], automatic=True)
         except Exception:
@@ -159,7 +171,7 @@ class Telegram:
             offer_id = result[0]
             grouped_id = getattr(event.message, 'grouped_id', None)
             if grouped_id is not None:
-                root = self.store.rows('''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
+                root = await asyncio.to_thread(self.store.rows, '''SELECT id FROM offers WHERE chat_id=? AND grouped_id=?
                     ORDER BY message_id LIMIT 1''', (event.chat_id, str(grouped_id)))
                 if not root:
                     return
@@ -172,22 +184,24 @@ class Telegram:
     async def notify_alert(self, alert):
         if not alert:
             return
-        config = self.store.gotify_settings()
+        config = await asyncio.to_thread(self.store.gotify_settings)
         if not (config['enabled'] and config['url'] and config['token']):
             return
         image_url = ''
         base_url = os.getenv('APP_PUBLIC_URL', '').rstrip('/')
         image_offer = alert
         if alert.get('grouped_id') is not None:
-            parts = self.store.rows('SELECT * FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY id',
-                                    (alert['chat_id'], alert['grouped_id']))
+            parts = await asyncio.to_thread(self.store.rows,
+                'SELECT * FROM offers WHERE chat_id=? AND grouped_id=? ORDER BY id',
+                (alert['chat_id'], alert['grouped_id']))
             image_offer = next((part for part in parts if (info := media_info(source_data(part)))
                                 and info['kind'] == 'photo' and not info['spoiler'] and info['thumbnail']), alert)
         info = media_info(source_data(image_offer))
         if base_url and info and info['kind'] == 'photo' and not info['spoiler'] and info['thumbnail']:
             expiry = int(time.time()) + 24 * 60 * 60
             identity = f"{image_offer['chat_id']}:{image_offer['message_id']}:{expiry}"
-            signature = hmac.new(self.store.media_signing_key().encode(), identity.encode(), hashlib.sha256).hexdigest()
+            signing_key = await asyncio.to_thread(self.store.media_signing_key)
+            signature = hmac.new(signing_key.encode(), identity.encode(), hashlib.sha256).hexdigest()
             image_url = f'{base_url}/public-media/{image_offer["id"] if "id" in image_offer else image_offer["offer_id"]}/{expiry}/{signature}'
         content = gotify_message(alert, image_url=image_url)
         async with self.notification_slots:
@@ -199,7 +213,7 @@ class Telegram:
     async def refresh(self, offer):
         if not await self.authorized():
             raise ValueError('Conecte a conta Telegram para recuperar o original.')
-        if not self.store.rows('SELECT id FROM chats WHERE id=?', (offer['chat_id'],)):
+        if not await asyncio.to_thread(self.store.rows, 'SELECT id FROM chats WHERE id=?', (offer['chat_id'],)):
             raise ValueError('Selecione este grupo novamente antes de recuperar o original.')
         message = await self.client.get_messages(offer['chat_id'], ids=offer['message_id'])
         if not message or not getattr(message, 'date', None):
@@ -210,9 +224,14 @@ class Telegram:
             messages = [m for m in neighbors if m and getattr(m, 'grouped_id', None) == message.grouped_id]
             if not any(m.id == message.id for m in messages):
                 messages.append(message)
-        for item in messages:
-            result = self.save_message(offer['chat_id'], item, report_alert=True)
-            await self.notify_alert(result[1] if result else None)
+        alerts = []
+        async with self.ingest_lock:
+            for item in messages:
+                result = await self._save_message(offer['chat_id'], item, report_alert=True)
+                if result and result[1]:
+                    alerts.append(result[1])
+        for alert in alerts:
+            await self.notify_alert(alert)
 
     def media_cache_path(self, offer, info, thumbnail=False):
         key = hashlib.sha256(f"{offer['chat_id']}:{offer['message_id']}:{info['identity']}:{thumbnail}".encode()).hexdigest()

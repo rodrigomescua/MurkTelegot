@@ -80,7 +80,11 @@ async def lifespan(app):
     await telegram.start()
     async def expire_loop():
         while True:
+            expiry_started = time.monotonic()
             await asyncio.to_thread(store.expire_offers)
+            expiry_seconds = time.monotonic() - expiry_started
+            if expiry_seconds >= 1:
+                logging.getLogger(__name__).warning('Slow offer cleanup: duration=%.3fs', expiry_seconds)
             await asyncio.to_thread(telegram.cleanup_media_cache)
             await asyncio.sleep(300)
     expiry = asyncio.create_task(expire_loop())
@@ -876,10 +880,24 @@ async def undo_seen(offer_id: int):
 
 @app.post('/offers/{offer_id}/delete', dependencies=[Depends(authenticate), Depends(csrf)])
 async def delete_offer(request: Request, offer_id: int, q: str = Form('', max_length=200), alerts: bool = Form(False)):
-    if not store.delete_offer(offer_id):
+    started = time.monotonic()
+    delete_started = started
+    deleted = await asyncio.to_thread(store.delete_offer, offer_id)
+    delete_seconds = time.monotonic() - delete_started
+    if not deleted:
         raise HTTPException(404, 'Alerta não encontrado.')
     if 'application/json' in request.headers.get('accept', ''):
-        return {'ok': True, 'message': 'Oferta excluída.', 'unread': store.unread()}
+        unread_started = time.monotonic()
+        unread = await asyncio.to_thread(store.unread)
+        unread_seconds = time.monotonic() - unread_started
+        total_seconds = time.monotonic() - started
+        if total_seconds >= 1:
+            logging.getLogger(__name__).warning(
+                'Slow offer deletion request: delete=%.3fs unread=%.3fs total=%.3fs',
+                delete_seconds, unread_seconds, total_seconds)
+        return {'ok': True, 'message': 'Oferta excluída.', 'unread': unread}
+    if delete_seconds >= 1:
+        logging.getLogger(__name__).warning('Slow offer deletion request: delete=%.3fs', delete_seconds)
     return redirect('Oferta removida.', q=q, alerts=alerts)
 
 

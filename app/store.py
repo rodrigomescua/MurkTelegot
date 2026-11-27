@@ -3,6 +3,7 @@ import json
 import os
 import re
 import secrets
+from functools import lru_cache
 from contextlib import contextmanager
 import sqlite3
 import unicodedata
@@ -33,6 +34,17 @@ def ignored_matches(text, word):
 def ignored_pattern(words):
     words = tuple(words)
     return re.compile(r'(?<![^\W_])(?:' + '|'.join(map(re.escape, words)) + r')(?![^\W_])') if words else None
+
+
+@lru_cache(maxsize=128)
+def _cached_ignored_pattern(words):
+    return ignored_pattern(words)
+
+
+@lru_cache(maxsize=128)
+def _cached_ignored_word_patterns(rows):
+    return tuple((word, re.compile(r'(?<![^\W_])' + re.escape(normalized) + r'(?![^\W_])'))
+                 for word, normalized in rows)
 
 
 def _irrelevant_ignored_words(rows):
@@ -428,9 +440,9 @@ class Store:
 
     @staticmethod
     def _ignored_word_patterns(db):
-        return [(row['word'], re.compile(r'(?<![^\W_])' + re.escape(row['normalized']) + r'(?![^\W_])'))
-                for row in db.execute('''SELECT word,normalized FROM ignored_keywords
-                    WHERE length(normalized)>=4 AND normalized GLOB '*[^0-9]*' ORDER BY id''')]
+        rows = tuple((row['word'], row['normalized']) for row in db.execute('''SELECT word,normalized FROM ignored_keywords
+                    WHERE length(normalized)>=4 AND normalized GLOB '*[^0-9]*' ORDER BY id'''))
+        return _cached_ignored_word_patterns(rows)
 
     @classmethod
     def _matching_ignored_word(cls, parts, patterns):
@@ -1227,7 +1239,7 @@ class Store:
                 return True
             auto_delete_words = [row[0] for row in db.execute(
                 'SELECT normalized FROM ignored_keywords WHERE auto_delete=1').fetchall()]
-            auto_delete_pattern = ignored_pattern(auto_delete_words)
+            auto_delete_pattern = _cached_ignored_pattern(tuple(auto_delete_words))
             delete_ids = {part['id'] for parts in candidate_parts
                           if auto_delete_pattern and any(
                               auto_delete_pattern.search(normalize(part['body'] or '')) for part in parts)
@@ -1245,7 +1257,8 @@ class Store:
             parts.extend(bodies)
             if self._alert_protects_offer(db, -1, chat_id, str(grouped_id)) or self._rule_matches_parts(db, parts):
                 return False
-            if not any(ignored_matches(body, pattern) for pattern in patterns for body in parts):
+            pattern = _cached_ignored_pattern(tuple(patterns))
+            if not pattern or not any(pattern.search(normalize(body or '')) for body in parts):
                 return False
             ids = [row[0] for row in db.execute(
                 'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped_id)))]
@@ -1496,10 +1509,12 @@ class Store:
             alert_protected = self._alert_protects_offer(db, previous['id'], chat_id, str(previous['grouped_id'])
                                 if previous and previous['grouped_id'] is not None else None) if previous else False
             alert_protected = alert_protected or self._rule_matches_parts(db, alert_parts)
-            auto_delete_words = [row[0] for row in db.execute(
-                'SELECT normalized FROM ignored_keywords WHERE auto_delete=1 ORDER BY id')]
-            if not alert_protected and any(ignored_matches(part, word) for word in auto_delete_words
-                   for part in [body or '', *(row['body'] or '' for row in prior_group)]):
+            auto_delete_words = tuple(row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords WHERE auto_delete=1 ORDER BY id'))
+            auto_delete_pattern = _cached_ignored_pattern(auto_delete_words)
+            if not alert_protected and auto_delete_pattern and any(
+                    auto_delete_pattern.search(normalize(part))
+                    for part in [body or '', *(row['body'] or '' for row in prior_group)]):
                 if grouped is not None:
                     ids = [row[0] for row in db.execute(
                         'SELECT id FROM offers WHERE chat_id=? AND grouped_id=?', (chat_id, str(grouped)))]
@@ -1509,8 +1524,10 @@ class Store:
                     ids = [previous['id']] if previous else []
                 self._permanently_delete_offers(db, ids)
                 return None
-            words = [row[0] for row in db.execute('SELECT normalized FROM ignored_keywords')]
-            was_ignored = any(ignored_matches(row['body'], word) for row in prior_group for word in words)
+            ignored_pattern = _cached_ignored_pattern(tuple(row[0] for row in db.execute(
+                'SELECT normalized FROM ignored_keywords ORDER BY id')))
+            was_ignored = bool(ignored_pattern and any(
+                ignored_pattern.search(normalize(row['body'] or '')) for row in prior_group))
             had_alert = False
             if report_alert:
                 had_alert = bool(db.execute('''SELECT 1 FROM offers o JOIN hits h ON h.offer_id=o.id
