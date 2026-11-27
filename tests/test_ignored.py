@@ -408,6 +408,29 @@ class IgnoredWordsTests(unittest.TestCase):
                          [{'word': 'Palavra antiga', 'auto_delete': 0}])
         self.assertFalse(Path(str(self.store.path) + '.before-ignored-auto-delete.db').exists())
 
+    def test_incoming_format_controls_are_stripped_before_auto_delete(self):
+        self.store.remove_rule(1)
+        self.assertTrue(self.store.add_ignored('Galaxy A57', auto_delete=True))
+        self.assertTrue(self.store.auto_delete_album(-100123, 55, ['Gal\u2060axy A57']))
+
+        source = json.dumps({'message': 'Outra\u2060 oferta 👩\u200d💻',
+                             'entities': [{'_': 'MessageEntityBold', 'offset': 7, 'length': 6}]})
+        self.store.ingest(-100123, 1, 'Outra\u2060 oferta 👩\u200d💻', '2026-11-04', None,
+                          source_json=source)
+        row = self.store.rows('SELECT body,source_json FROM offers')[0]
+        self.assertEqual(row['body'], 'Outra oferta 👩\u200d💻')
+        saved_source = json.loads(row['source_json'])
+        self.assertEqual(saved_source['message'], row['body'])
+        self.assertNotIn('\u2060', saved_source['message'])
+        self.assertEqual(saved_source['entities'][0]['offset'], 6)
+        self.assertEqual(saved_source['entities'][0]['length'], 6)
+
+        result = self.store.ingest(-100123, 2, 'Gal\u2060axy A57', '2026-11-04', None)
+
+        self.assertIsNone(result)
+        self.assertEqual(self.store.rows('SELECT message_id FROM offers'), [{'message_id': 1}])
+        self.assertEqual(self.store.rows('SELECT * FROM hits'), [])
+
     def test_auto_delete_physically_removes_matching_albums(self):
         self.store.remove_rule(1)
         self.add_offer(1, 'Notebook e PS5 Slim', grouped=55)

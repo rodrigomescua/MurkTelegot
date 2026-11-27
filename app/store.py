@@ -15,7 +15,8 @@ MAX_AI_PARALLELISM = 8
 
 
 def normalize(text):
-    return ''.join(c for c in unicodedata.normalize('NFKD', text.casefold()) if not unicodedata.combining(c))
+    return ''.join(c for c in unicodedata.normalize('NFKD', text.casefold())
+                   if unicodedata.category(c) != 'Cf' and not unicodedata.combining(c))
 
 
 def matches(text, keywords):
@@ -1452,6 +1453,33 @@ class Store:
             db.execute("INSERT INTO settings(key,value) VALUES('frequent_terms_min_chars',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(value),))
 
     def ingest(self, chat_id, message_id, body, date, url, *, source_json=None, report_alert=False):
+        original_body = body or ''
+        body = ''.join(c for c in original_body
+                       if unicodedata.category(c) != 'Cf' or c in '\u200c\u200d')
+        if body != original_body and source_json:
+            source = json.loads(source_json)
+            if 'message' in source:
+                source['message'] = body
+            for entity in source.get('entities') or []:
+                start, length = entity.get('offset'), entity.get('length')
+                if not isinstance(start, int) or not isinstance(length, int):
+                    continue
+
+                def clean_offset(offset):
+                    units = removed = 0
+                    for char in original_body:
+                        if units >= offset:
+                            break
+                        width = len(char.encode('utf-16-le')) // 2
+                        if unicodedata.category(char) == 'Cf' and char not in '\u200c\u200d':
+                            removed += width
+                        units += width
+                    return offset - removed
+
+                new_start = clean_offset(start)
+                entity['offset'] = new_start
+                entity['length'] = clean_offset(start + length) - new_start
+            source_json = json.dumps(source)
         grouped = json.loads(source_json).get('grouped_id') if source_json else None
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
